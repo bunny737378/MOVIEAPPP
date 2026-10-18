@@ -1,0 +1,36 @@
+name: Android CI Build
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Perfect Release APKs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Compile and Build Release APKs
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Upload All APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: MovieBox-Release-APKs
+          path: app/build/outputs/apk/release/*.apk
