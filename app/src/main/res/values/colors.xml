@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="app_bg">#141414</color>
+    <color name="top_bar_bg">#141414</color>
+    <color name="search_bg">#1EFFFFFF</color>
+    <color name="bottom_nav_bg">#D91C1C20</color>
+    <color name="white">#FFFFFF</color>
+    <color name="grey_text">#80FFFFFF</color>
+</resources>
