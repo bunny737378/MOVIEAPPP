@@ -1,17 +1,13 @@
 package com.xtsream.app.screens
 
-import androidx.compose.foundation.Image
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,12 +19,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImagePainter
-import coil.compose.rememberAsyncImagePainter
-import coil.request.ImageRequest
 import com.xtsream.app.AppDarkBg
 import com.xtsream.app.AppGlobalState
 import com.xtsream.app.R
@@ -39,21 +31,110 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
 
-data class DownloadItemInfo(
-    val fileBaseName: String,
-    val targetDir: File,
-    val displayTitle: String,
-    val thumbFile: File,
-    val isCompleted: Boolean,
-    val isActive: Boolean,
-    val json: JSONObject
-)
+fun loadAllDownloads(context: Context): List<DownloadItemInfo> {
+    val root = File(context.getExternalFilesDir(null), "downloads")
+    val list = mutableListOf<DownloadItemInfo>()
+    if (!root.exists()) return list
+
+    val activeFileBase = DownloadManager.getFinalFileName(
+        DownloadManager.lastProviderId, DownloadManager.lastSeriesTitle, DownloadManager.lastEpisodeTitle, 
+        DownloadManager.lastEpisodeId, DownloadManager.lastServerName, DownloadManager.selQualityTag
+    )
+
+    root.walkTopDown().filter { it.isFile && it.name.endsWith(".info") }.forEach { infoFile ->
+        try {
+            val jsonStr = infoFile.readText()
+            val json = JSONObject(jsonStr)
+            val fileBaseName = infoFile.nameWithoutExtension
+            val targetDir = infoFile.parentFile ?: return@forEach
+
+            val safeEpTitleFolder = json.optString("episodeTitle", "").replace(Regex("[^a-zA-Z0-9]"), "_").lowercase()
+            val thumbFile = File(targetDir, "$safeEpTitleFolder.jpg")
+            val mkvFile = File(targetDir, "$fileBaseName.mkv")
+
+            val seriesTitle = json.optString("seriesTitle", "").ifBlank { json.optString("displayTitle", fileBaseName) }
+            val episodeTitle = json.optString("episodeTitle", "")
+            val displayTitle = json.optString("displayTitle", fileBaseName)
+            val providerId = json.optString("providerId", "XSTREAM")
+            val qualityTag = json.optString("qualityTag", "")
+            val serverName = json.optString("serverName", "")
+            val thumbUrl = json.optString("thumbUrl", "")
+
+            val isCompleted = mkvFile.exists() && mkvFile.length() > 0L
+            val isActive = DownloadManager.downloadStatus in listOf(1, 2) && (activeFileBase == fileBaseName)
+            val fileSize = if (isCompleted) mkvFile.length() else 0L
+
+            list.add(
+                DownloadItemInfo(
+                    fileBaseName = fileBaseName,
+                    targetDir = targetDir,
+                    seriesTitle = seriesTitle,
+                    episodeTitle = episodeTitle,
+                    displayTitle = displayTitle,
+                    providerId = providerId,
+                    qualityTag = qualityTag,
+                    serverName = serverName,
+                    thumbFile = thumbFile,
+                    thumbUrl = thumbUrl,
+                    mkvFile = mkvFile,
+                    fileSize = fileSize,
+                    isCompleted = isCompleted,
+                    isActive = isActive,
+                    json = json
+                )
+            )
+        } catch(e: Exception) {}
+    }
+    return list
+}
+
+fun deleteDownload(item: DownloadItemInfo) {
+    try {
+        if (item.mkvFile.exists()) item.mkvFile.delete()
+        val infoFile = File(item.targetDir, "${item.fileBaseName}.info")
+        if (infoFile.exists()) infoFile.delete()
+        val tmpDir = File(item.targetDir, "${item.fileBaseName}_tmp")
+        if (tmpDir.exists()) tmpDir.deleteRecursively()
+        if (item.thumbFile.exists()) item.thumbFile.delete()
+        if (item.targetDir.listFiles()?.isEmpty() == true) {
+            item.targetDir.delete()
+        }
+    } catch (e: Exception) {}
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ListUI(onProviderSelected: (PluginConfig) -> Unit) {
     var selectedTab by remember { mutableIntStateOf(AppGlobalState.activeListTab) }
     val context = LocalContext.current
+    var selectedPlaylistSeries by remember { mutableStateOf<String?>(null) }
+    var refreshKey by remember { mutableIntStateOf(0) }
+
+    val downloadStatus = DownloadManager.downloadStatus
+    val allDownloads = remember(refreshKey, downloadStatus) {
+        loadAllDownloads(context)
+    }
+
+    if (selectedPlaylistSeries != null) {
+        val seriesEpisodes = allDownloads.filter {
+            it.isCompleted && (it.seriesTitle == selectedPlaylistSeries || it.displayTitle == selectedPlaylistSeries)
+        }
+        if (seriesEpisodes.isNotEmpty()) {
+            SeriesPlaylistSubPage(
+                seriesTitle = selectedPlaylistSeries!!,
+                episodes = seriesEpisodes,
+                onBack = { selectedPlaylistSeries = null },
+                onItemClick = { item -> playDownloadedMedia(context, item.mkvFile) },
+                onItemDelete = { item ->
+                    deleteDownload(item)
+                    refreshKey++
+                }
+            )
+            return
+        } else {
+            selectedPlaylistSeries = null
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(AppDarkBg).pointerInput(Unit){}.statusBarsPadding()) {
         Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.Center) {
@@ -70,150 +151,104 @@ fun ListUI(onProviderSelected: (PluginConfig) -> Unit) {
         }
 
         if (selectedTab == 1) {
-            val root = File(context.getExternalFilesDir(null), "downloads")
-            val downloadItems = mutableListOf<DownloadItemInfo>()
-            
-            if (root.exists()) {
-                val activeFileBase = DownloadManager.getFinalFileName(
-                    DownloadManager.lastProviderId, DownloadManager.lastSeriesTitle, DownloadManager.lastEpisodeTitle, 
-                    DownloadManager.lastEpisodeId, DownloadManager.lastServerName, DownloadManager.selQualityTag
-                )
-                
-                root.walkTopDown().filter { it.isFile && it.name.endsWith(".info") }.forEach { infoFile ->
-                    try {
-                        val jsonStr = infoFile.readText()
-                        val json = JSONObject(jsonStr)
-                        val fileBaseName = infoFile.nameWithoutExtension
-                        val targetDir = infoFile.parentFile!!
-                        
-                        val safeEpTitleFolder = json.optString("episodeTitle", "").replace(Regex("[^a-zA-Z0-9]"), "_").lowercase()
-                        val thumbFile = File(targetDir, "$safeEpTitleFolder.jpg")
-                        val mkvFile = File(targetDir, "$fileBaseName.mkv")
-                        
-                        val displayTitle = json.optString("displayTitle", fileBaseName)
-                        val isCompleted = mkvFile.exists() && mkvFile.length() > 0
-                        
-                        val isActive = DownloadManager.downloadStatus in listOf(1, 2) && (activeFileBase == fileBaseName)
-                        
-                        downloadItems.add(DownloadItemInfo(fileBaseName, targetDir, displayTitle, thumbFile, isCompleted, isActive, json))
-                    } catch(e: Exception) {}
-                }
-            }
+            val inProgressDownloads = allDownloads.filter { !it.isCompleted }
+            val completedDownloads = allDownloads.filter { it.isCompleted }
+            val completedGroups = completedDownloads.groupBy { it.seriesTitle.ifBlank { it.displayTitle } }
 
-            LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp), contentPadding = PaddingValues(bottom = 100.dp)) {
-                
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(bottom = 100.dp)
+            ) {
                 if (DownloadManager.downloadStatus == -1) {
                     item {
-                        Text("Last Download Failed Unrecoverably", color = Color.Red, modifier = Modifier.padding(bottom = 16.dp))
+                        Text(
+                            text = "Download failed unrecoverably",
+                            color = Color(0xFFFF5252),
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
                     }
                 }
 
-                if (downloadItems.isEmpty()) {
+                if (inProgressDownloads.isEmpty() && completedDownloads.isEmpty()) {
                     item {
-                        Box(modifier = Modifier.fillMaxWidth().padding(top = 20.dp), contentAlignment = Alignment.Center) {
-                            Text(text = "No downloaded episodes yet.", color = Color.Gray, fontSize = 16.sp)
+                        Box(modifier = Modifier.fillMaxWidth().padding(top = 40.dp), contentAlignment = Alignment.Center) {
+                            Text(text = "No downloaded episodes yet.", color = Color.Gray, fontSize = 15.sp)
                         }
                     }
                 } else {
-                    items(downloadItems.sortedBy { it.isCompleted }) { item ->
-                        var isLoaded by remember { mutableStateOf(false) }
-                        val painter = rememberAsyncImagePainter(
-                            model = ImageRequest.Builder(context).data(item.thumbFile).crossfade(true).build(),
-                            onState = { state -> isLoaded = state is AsyncImagePainter.State.Success }
-                        )
-                        
-                        val isPaused = !item.isCompleted && !item.isActive
-                        val isErrPaused = !item.isCompleted && DownloadManager.downloadStatus == 4 && item.fileBaseName == DownloadManager.getFinalFileName(DownloadManager.lastProviderId, DownloadManager.lastSeriesTitle, DownloadManager.lastEpisodeTitle, DownloadManager.lastEpisodeId, DownloadManager.lastServerName, DownloadManager.selQualityTag)
+                    // Active & in-progress downloads (HTML Episode 2 UI)
+                    if (inProgressDownloads.isNotEmpty()) {
+                        items(inProgressDownloads, key = { it.fileBaseName }) { item ->
+                            DownloadingEpisodeCard(
+                                item = item,
+                                onPauseResume = {
+                                    if (item.isActive) {
+                                        DownloadManager.cancelDownload()
+                                        refreshKey++
+                                    } else {
+                                        val j = item.json
+                                        val hMap = mutableMapOf<String, String>()
+                                        j.optJSONObject("headers")?.let { h -> h.keys().forEach { hMap[it] = h.getString(it) } }
+                                        val aList = mutableListOf<String>()
+                                        j.optJSONArray("audioLangs")?.let { a -> for (i in 0 until a.length()) aList.add(a.getString(i)) }
+                                        val sList = mutableListOf<String>()
+                                        j.optJSONArray("subLangs")?.let { s -> for (i in 0 until s.length()) sList.add(s.getString(i)) }
+                                        val extList = mutableListOf<String>()
+                                        j.optJSONArray("externalSubs")?.let { ex -> for (i in 0 until ex.length()) extList.add(ex.getString(i)) }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp).background(Color.Transparent),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier.width(100.dp).aspectRatio(16f/9f)
-                                    .clip(RoundedCornerShape(6.dp)).background(Color(0xFF151515)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Image(painter = painter, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().then(if (!isLoaded) Modifier.skeletonEffect() else Modifier))
-                            }
-                            
-                            Spacer(modifier = Modifier.width(14.dp))
-                            
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(text = item.displayTitle, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                
-                                if (item.isCompleted) {
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    val mkv = File(item.targetDir, "${item.fileBaseName}.mkv")
-                                    val sizeMb = String.format("%.1f MB", mkv.length() / (1024f * 1024f))
-                                    val pName = item.json.optString("providerId", "")
-                                    val sName = item.json.optString("serverName", "")
-                                    Text(text = "$sizeMb • $pName • $sName", color = Color.Gray, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                } else if (item.isActive || isErrPaused) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    val sizeText = if (DownloadManager.totalMb.isBlank()) DownloadManager.downloadedMb else "${DownloadManager.downloadedMb} / ${DownloadManager.totalMb}"
-                                    val isMerging = DownloadManager.downloadStatus == 2
-                                    
-                                    LinearProgressIndicator(
-                                        progress = { if (isMerging) DownloadManager.mergeProgressPercent / 100f else DownloadManager.progressPercent / 100f },
-                                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                                        color = if (isErrPaused) Color(0xFFFFB74D) else Color(0xFFBEF3D9),
-                                        trackColor = Color(0xFF333333)
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text(text = sizeText, color = Color.Gray, fontSize = 11.sp)
-                                        Text(
-                                            text = if (isErrPaused) "Error/Paused" else if (isMerging) "Merging... ${DownloadManager.mergeProgressPercent}%" else DownloadManager.downloadSpeed, 
-                                            color = if (isErrPaused || isMerging) Color(0xFFFFB74D) else Color(0xFFBEF3D9), 
-                                            fontSize = 11.sp, fontWeight = FontWeight.Bold
+                                        DownloadManager.startDownload(
+                                            context = context,
+                                            masterUrl = j.getString("masterUrl"),
+                                            providerId = j.getString("providerId"),
+                                            seriesTitle = j.getString("seriesTitle"),
+                                            episodeTitle = j.getString("episodeTitle"),
+                                            episodeId = j.getString("episodeId"),
+                                            serverName = j.getString("serverName"),
+                                            headers = hMap,
+                                            streamType = j.getString("streamType"),
+                                            qualityTag = j.getString("qualityTag"),
+                                            audioLangs = aList,
+                                            subLangs = sList,
+                                            externalSubs = extList,
+                                            thumbUrl = j.optString("thumbUrl", "")
                                         )
+                                        DownloadManager.resumeDownload(context)
+                                        refreshKey++
                                     }
-                                } else {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text("Paused - Tap play to resume", color = Color.Gray, fontSize = 11.sp)
                                 }
-                            }
-                            
-                            // Control Button
-                            if (!item.isCompleted) {
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Box(
-                                    modifier = Modifier.size(36.dp).clip(CircleShape)
-                                        .background(Color.White.copy(alpha=0.1f)).clickable {
-                                            if (item.isActive) {
-                                                DownloadManager.cancelDownload()
-                                            } else {
-                                                val j = item.json
-                                                val hMap = mutableMapOf<String, String>()
-                                                j.optJSONObject("headers")?.let { h -> h.keys().forEach { hMap[it] = h.getString(it) } }
-                                                val aList = mutableListOf<String>(); j.optJSONArray("audioLangs")?.let { a -> for(i in 0 until a.length()) aList.add(a.getString(i)) }
-                                                val sList = mutableListOf<String>(); j.optJSONArray("subLangs")?.let { s -> for(i in 0 until s.length()) sList.add(s.getString(i)) }
-                                                val extList = mutableListOf<String>(); j.optJSONArray("externalSubs")?.let { ex -> for(i in 0 until ex.length()) extList.add(ex.getString(i)) }
+                            )
+                        }
+                    }
 
-                                                DownloadManager.startDownload(
-                                                    context = context, masterUrl = j.getString("masterUrl"), providerId = j.getString("providerId"),
-                                                    seriesTitle = j.getString("seriesTitle"), episodeTitle = j.getString("episodeTitle"),
-                                                    episodeId = j.getString("episodeId"), serverName = j.getString("serverName"),
-                                                    headers = hMap, streamType = j.getString("streamType"), qualityTag = j.getString("qualityTag"),
-                                                    audioLangs = aList, subLangs = sList, externalSubs = extList, thumbUrl = j.optString("thumbUrl", "")
-                                                )
-                                                DownloadManager.resumeDownload(context)
-                                            }
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = if (item.isActive) Icons.Default.Pause else Icons.Default.PlayArrow, 
-                                        contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp)
-                                    )
-                                }
+                    // Completed downloads: Single card (Episode 1 UI) or Series Playlist Card (Mockup 2 UI)
+                    completedGroups.forEach { (seriesTitle, episodes) ->
+                        if (episodes.size == 1) {
+                            item(key = episodes.first().fileBaseName) {
+                                val single = episodes.first()
+                                CompletedEpisodeCard(
+                                    item = single,
+                                    onClick = { playDownloadedMedia(context, single.mkvFile) },
+                                    onDelete = {
+                                        deleteDownload(single)
+                                        refreshKey++
+                                    }
+                                )
+                            }
+                        } else {
+                            item(key = "playlist_$seriesTitle") {
+                                SeriesPlaylistCard(
+                                    seriesTitle = seriesTitle,
+                                    episodes = episodes,
+                                    onClick = { selectedPlaylistSeries = seriesTitle }
+                                )
                             }
                         }
                     }
                 }
             }
         } else {
+            // Providers Tab
             val scope = rememberCoroutineScope()
             var selectedSheetPlugin by remember { mutableStateOf<PluginConfig?>(null) }
             val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)

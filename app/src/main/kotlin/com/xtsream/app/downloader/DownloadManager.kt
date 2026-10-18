@@ -373,24 +373,81 @@ object DownloadManager {
             })
         }
 
-        val results = allJobs.awaitAll()
-        val failedCount = results.count { !it }
+        allJobs.awaitAll()
 
-        if (failedCount > 0) {
-            withContext(Dispatchers.Main) { downloadSpeed = "Retrying $failedCount..." }
+        fun countMissing(): Int {
+            var count = 0
+            for (track in allTracks) {
+                for ((_, segFile) in track.jobs) {
+                    if (!segFile.exists() || segFile.length() == 0L) count++
+                }
+            }
+            for ((_, eFile) in extSubFilesToDownload) {
+                if (!eFile.exists() || eFile.length() == 0L) count++
+            }
+            return count
+        }
+
+        var missingCount = countMissing()
+
+        if (missingCount > 4) {
+            withContext(Dispatchers.Main) { downloadSpeed = "Retrying $missingCount..." }
             for (track in allTracks) {
                 for ((segUrl, segFile) in track.jobs) {
                     if (!segFile.exists() || segFile.length() == 0L) {
                         val iv = track.aes?.third ?: ByteBuffer.allocate(16).putLong(8, 0L).array()
-                        downloadSegmentWithRetries(segUrl, segFile, lastHeaders, track.aes?.first, iv, 8)
+                        downloadSegmentWithRetries(segUrl, segFile, lastHeaders, track.aes?.first, iv, 3)
                     }
                 }
             }
             extSubFilesToDownload.forEach { (extUrl, eFile) ->
                 if (!eFile.exists() || eFile.length() == 0L) {
-                    downloadSegmentWithRetries(extUrl, eFile, lastHeaders, null, null, 8)
+                    downloadSegmentWithRetries(extUrl, eFile, lastHeaders, null, null, 3)
                 }
             }
+            missingCount = countMissing()
+        }
+
+        // If 4 or fewer missing segments remain, discard them and clean playlists
+        if (missingCount in 1..4) {
+            for (track in allTracks) {
+                val missingFileNames = track.jobs
+                    .filter { !it.second.exists() || it.second.length() == 0L }
+                    .map { it.second.name }
+                    .toSet()
+
+                if (missingFileNames.isNotEmpty() && track.playlistFile.exists()) {
+                    val lines = track.playlistFile.readLines()
+                    val cleanLines = mutableListOf<String>()
+                    var idx = 0
+                    while (idx < lines.size) {
+                        val line = lines[idx]
+                        val trimmed = line.trim()
+                        if (trimmed.startsWith("#EXTINF:") && idx + 1 < lines.size) {
+                            val nextLine = lines[idx + 1].trim()
+                            if (missingFileNames.any { nextLine.endsWith(it) || nextLine == it }) {
+                                idx += 2
+                                continue
+                            }
+                        }
+                        if (missingFileNames.any { trimmed.endsWith(it) || trimmed == it }) {
+                            idx++
+                            continue
+                        }
+                        if (trimmed.startsWith("#EXT-X-MAP:")) {
+                            if (missingFileNames.any { trimmed.contains(it) }) {
+                                idx++
+                                continue
+                            }
+                        }
+                        cleanLines.add(line)
+                        idx++
+                    }
+                    track.playlistFile.writeText(cleanLines.joinToString("\n"))
+                }
+            }
+            segmentsDownloadedCount.set(totalSegmentsToDownload.get())
+            withContext(Dispatchers.Main) { progressPercent = 100 }
         }
 
         if (CoroutineScope(Dispatchers.IO).isActive) {
@@ -402,6 +459,7 @@ object DownloadManager {
                 etaText = "--"
             }
 
+            val validExtSubs = plan.extSubFiles.filter { it.exists() && it.length() > 0L }
             val finalOut = File(rootDownloads, "$safeTitle.mkv")
             val success = muxWithFfmpeg(
                 context = context,
@@ -410,7 +468,7 @@ object DownloadManager {
                 audioLangs = plan.audioTracks.map { LANG3[it.lang] ?: it.lang },
                 subPlaylists = plan.subTracks.map { it.playlistFile },
                 subLangs = plan.subTracks.map { LANG3[it.lang] ?: it.lang },
-                extSubFiles = plan.extSubFiles,
+                extSubFiles = validExtSubs,
                 outFile = finalOut
             )
 
@@ -603,12 +661,21 @@ object DownloadManager {
                     if (rate > 0) ((totalSeg - done) / rate).toInt() else -1
                 } else -1
                 CoroutineScope(Dispatchers.Main).launch {
-                    downloadedMb = String.format("%.1f MB", total / (1024f * 1024f))
-                    if (!lastStreamType.contains("mkv") && !lastStreamType.contains("mp4")) {
-                        totalMb = ""
+                    downloadedMb = String.format(java.util.Locale.US, "%.1f MB", total / (1024f * 1024f))
+                    if (totalMb.isBlank() && done >= 3 && totalSeg > 0 && total > 0) {
+                        val estTotalMb = (total.toDouble() / done.toDouble()) * totalSeg.toDouble() / (1024.0 * 1024.0)
+                        totalMb = String.format(java.util.Locale.US, "%.1f MB", estTotalMb)
                     }
                     downloadSpeed = speedStr
-                    etaText = if (eta >= 0) "${eta}s" else "--"
+                    etaText = when {
+                        eta <= 0 -> "--"
+                        eta < 60 -> "${eta} sec left"
+                        else -> {
+                            val mins = eta / 60
+                            val secs = eta % 60
+                            if (secs > 0) "$mins min $secs sec left" else "$mins min left"
+                        }
+                    }
                 }
                 lastTime = now
                 bytesSinceLast = 0
