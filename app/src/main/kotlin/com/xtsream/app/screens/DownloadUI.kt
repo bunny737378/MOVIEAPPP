@@ -623,6 +623,7 @@ fun SeriesPlaylistSubPage(
         modifier = Modifier
             .fillMaxSize()
             .background(AppDarkBg)
+            .statusBarsPadding()
     ) {
         // Sub-page top bar
         Row(
@@ -662,13 +663,210 @@ fun SeriesPlaylistSubPage(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
-            contentPadding = PaddingValues(top = 12.dp, bottom = 100.dp)
+            contentPadding = PaddingValues(top = 12.dp, bottom = 140.dp)
         ) {
-            items(episodes) { ep ->
+            items(episodes, key = { it.fileBaseName }) { ep ->
                 CompletedEpisodeCard(
                     item = ep,
                     onClick = { onItemClick(ep) },
                     onDelete = { onItemDelete(ep) }
+                )
+            }
+        }
+    }
+}
+
+/* =========================================================================
+   LIVE ACTIVE DOWNLOADING CARD
+   Directly bound to DownloadManager's observable StateFlow/MutableState properties
+   ========================================================================= */
+@Composable
+fun LiveDownloadingCard(
+    onPauseResume: () -> Unit
+) {
+    val context = LocalContext.current
+    val isMerging = DownloadManager.downloadStatus == 2
+    val isErrPaused = DownloadManager.downloadStatus == 4
+    val progressFraction = if (isMerging) {
+        (DownloadManager.mergeProgressPercent / 100f).coerceIn(0f, 1f)
+    } else {
+        (DownloadManager.progressPercent / 100f).coerceIn(0f, 1f)
+    }
+
+    val (line1, line2) = splitTitle(
+        title = DownloadManager.lastSeriesTitle.ifBlank { DownloadManager.activeTitle },
+        subtitle = DownloadManager.lastEpisodeTitle.takeIf { it.isNotBlank() && it != DownloadManager.lastSeriesTitle }
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // 16:9 Thumbnail
+        Box(
+            modifier = Modifier
+                .width(124.dp)
+                .height(70.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .background(Color(0xFF181818)),
+            contentAlignment = Alignment.Center
+        ) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(DownloadManager.lastThumbUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        Spacer(modifier = Modifier.width(10.dp))
+
+        // Details exactly matching thumbnail height (70dp)
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .height(70.dp),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = line1,
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight(650),
+                lineHeight = 16.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (!line2.isNullOrBlank()) {
+                Text(
+                    text = line2,
+                    color = Color(0xFFC4C8D2),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    lineHeight = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.height(3.dp))
+
+            // Metadata: Provider badge
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 3.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xFF252525))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = DownloadManager.lastProviderId.ifBlank { "STREAM" }.uppercase(),
+                        color = Color(0xFFD2D2D2),
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.4.sp
+                    )
+                }
+            }
+
+            // Download stats: "78.4/302 MB", "5 MB/s", "45 sec left"
+            val downloadedText = if (DownloadManager.totalMb.isNotBlank()) {
+                "${DownloadManager.downloadedMb}/${DownloadManager.totalMb}"
+            } else {
+                DownloadManager.downloadedMb
+            }
+            val speedText = if (isMerging) {
+                "Merging... ${DownloadManager.mergeProgressPercent}%"
+            } else {
+                DownloadManager.downloadSpeed
+            }
+            val timeText = if (isMerging) "" else DownloadManager.etaText
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = downloadedText,
+                    color = Color(0xFFBCBCBC),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = speedText,
+                    color = Color(0xFFDEDEDE),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                if (timeText.isNotBlank() && timeText != "--") {
+                    Spacer(modifier = Modifier.weight(1f))
+                    Text(
+                        text = timeText,
+                        color = Color(0xFF9EBEE7),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Sky-blue to Navy progress bar
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(Color(0xFF242831))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(fraction = progressFraction.coerceAtLeast(0.02f))
+                        .clip(RoundedCornerShape(99.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(Color(0xFF87CEEB), Color(0xFF102A56))
+                            )
+                        )
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        // Pause/Resume button
+        IconButton(
+            onClick = onPauseResume,
+            modifier = Modifier.size(30.dp)
+        ) {
+            if (!isErrPaused) {
+                Row(
+                    modifier = Modifier.size(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(modifier = Modifier.width(4.dp).height(16.dp).clip(RoundedCornerShape(1.dp)).background(Color.White))
+                    Box(modifier = Modifier.width(4.dp).height(16.dp).clip(RoundedCornerShape(1.dp)).background(Color.White))
+                }
+            } else {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Resume",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }

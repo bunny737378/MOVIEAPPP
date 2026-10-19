@@ -461,7 +461,7 @@ object DownloadManager {
 
             val validExtSubs = plan.extSubFiles.filter { it.exists() && it.length() > 0L }
             val finalOut = File(rootDownloads, "$safeTitle.mkv")
-            val success = muxWithFfmpeg(
+            var success = muxWithFfmpeg(
                 context = context,
                 videoPlaylist = plan.videoTrack.playlistFile,
                 audioPlaylists = plan.audioTracks.map { it.playlistFile },
@@ -472,12 +472,68 @@ object DownloadManager {
                 outFile = finalOut
             )
 
+            if (!success || !finalOut.exists() || finalOut.length() == 0L) {
+                success = fallbackConcat(plan.videoTrack, finalOut)
+            }
+
             if (success && finalOut.exists() && finalOut.length() > 0) {
                 workDir.deleteRecursively()
                 withContext(Dispatchers.Main) { downloadStatus = 3 }
             } else {
                 withContext(Dispatchers.Main) { downloadStatus = -1 }
             }
+        }
+    }
+
+    fun getFfmpegExecutable(context: Context): File? {
+        val nativeFile = File(context.applicationInfo.nativeLibraryDir, "libffmpeg.so")
+        if (nativeFile.exists() && nativeFile.canExecute()) {
+            return nativeFile
+        }
+        val binDir = File(context.filesDir, "bin").apply { mkdirs() }
+        val extractedFfmpeg = File(binDir, "libffmpeg.so")
+        if (extractedFfmpeg.exists() && extractedFfmpeg.length() > 0L) {
+            extractedFfmpeg.setExecutable(true, false)
+            return extractedFfmpeg
+        }
+        try {
+            val apkPath = context.applicationInfo.sourceDir
+            val zip = java.util.zip.ZipFile(File(apkPath))
+            val soNames = listOf("libffmpeg.so", "libavcodec.so", "libavformat.so", "libavutil.so", "libswresample.so", "libswscale.so", "libcrypto.so", "libssl.so")
+            for (name in soNames) {
+                val entry = zip.entries().asSequence().firstOrNull { it.name.endsWith("/$name") || it.name == name }
+                if (entry != null) {
+                    val dest = File(binDir, name)
+                    zip.getInputStream(entry).use { input -> dest.outputStream().use { output -> input.copyTo(output) } }
+                    dest.setExecutable(true, false)
+                }
+            }
+            zip.close()
+            if (extractedFfmpeg.exists() && extractedFfmpeg.length() > 0L) {
+                extractedFfmpeg.setExecutable(true, false)
+                return extractedFfmpeg
+            }
+        } catch (e: Exception) {}
+        return if (nativeFile.exists()) nativeFile else null
+    }
+
+    fun fallbackConcat(videoTrack: ResolvedTrack, outFile: File): Boolean {
+        return try {
+            val segments = videoTrack.jobs.map { it.second }.filter { it.exists() && it.length() > 0L }
+            if (segments.isEmpty()) return false
+            val tmp = File(outFile.parentFile, outFile.name + ".tmp")
+            tmp.outputStream().use { outStream ->
+                for (seg in segments) {
+                    seg.inputStream().use { inStream -> inStream.copyTo(outStream) }
+                }
+            }
+            if (tmp.exists() && tmp.length() > 0L) {
+                if (outFile.exists()) outFile.delete()
+                tmp.renameTo(outFile)
+                true
+            } else false
+        } catch (e: Exception) {
+            false
         }
     }
 
@@ -491,12 +547,9 @@ object DownloadManager {
         extSubFiles: List<File>,
         outFile: File
     ): Boolean = withContext(Dispatchers.IO) {
-        val ffmpegPath = context.applicationInfo.nativeLibraryDir + "/libffmpeg.so"
-        val nativeLibDir = context.applicationInfo.nativeLibraryDir
-
-        if (!File(ffmpegPath).exists()) {
-            return@withContext false
-        }
+        val ffmpegFile = getFfmpegExecutable(context) ?: return@withContext false
+        val ffmpegPath = ffmpegFile.absolutePath
+        val nativeLibDir = ffmpegFile.parentFile?.absolutePath ?: context.applicationInfo.nativeLibraryDir
 
         var totalDurationSec = 0.0
         try {
