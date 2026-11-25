@@ -64,8 +64,7 @@ android {
                 "META-INF/LICENSE",
                 "META-INF/LICENSE.txt",
                 "META-INF/NOTICE",
-                "META-INF/NOTICE.txt",
-                "META-INF/*.kotlin_module"
+                "META-INF/NOTICE.txt"
             )
         }
     }
@@ -96,15 +95,12 @@ dependencies {
     implementation(libs.androidx.palette)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(libs.material)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
-    implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.foundation)
-    implementation(libs.compose.material.icons.extended)
-    debugImplementation(libs.compose.ui.tooling)
+    implementation("androidx.compose.material:material-icons-core")
 
     implementation(libs.coil3)
     implementation(libs.coil3.compose)

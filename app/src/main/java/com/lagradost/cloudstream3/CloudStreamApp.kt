@@ -60,15 +60,7 @@ class CloudStreamApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
         context = this
-        app.initClient(this)
-        ExceptionHandler(filesDir.resolve("last_error")) {
-            val intent = context!!.packageManager.getLaunchIntentForPackage(context!!.packageName)
-            startActivity(Intent.makeRestartActivityTask(intent!!.component))
-        }.also {
-            exceptionHandler = it
-            Thread.setDefaultUncaughtExceptionHandler(it)
-        }
-
+        runCatching { app.initClient(this) }
         AppDebug.isDebug = BuildConfig.DEBUG
     }
 

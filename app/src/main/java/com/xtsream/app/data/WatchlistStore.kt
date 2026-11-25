@@ -96,8 +96,15 @@ object WatchlistStore {
                 put("apiName", item.apiName)
                 put("posterUrl", item.posterUrl ?: "")
                 put("type", item.type)
+                put("shortType", item.shortType)
                 put("quality", item.quality ?: "")
                 put("score", item.score ?: "")
+                put("year", item.year ?: 0)
+                put("hasSub", item.hasSub)
+                put("hasDub", item.hasDub)
+                put("subEpisodes", item.subEpisodes ?: 0)
+                put("dubEpisodes", item.dubEpisodes ?: 0)
+                put("episodeCount", item.episodeCount ?: 0)
                 val hObj = JSONObject()
                 item.posterHeaders.forEach { (k, v) -> hObj.put(k, v) }
                 put("headers", hObj)
@@ -130,8 +137,15 @@ object WatchlistStore {
                             posterUrl = obj.optString("posterUrl", "").takeIf { it.isNotBlank() },
                             posterHeaders = headers,
                             type = obj.optString("type", ""),
+                            shortType = obj.optString("shortType", ""),
                             quality = obj.optString("quality", "").takeIf { it.isNotBlank() },
-                            score = obj.optString("score", "").takeIf { it.isNotBlank() }
+                            score = obj.optString("score", "").takeIf { it.isNotBlank() },
+                            year = obj.optInt("year", 0).takeIf { it > 0 },
+                            hasSub = obj.optBoolean("hasSub", false),
+                            hasDub = obj.optBoolean("hasDub", false),
+                            subEpisodes = obj.optInt("subEpisodes", 0).takeIf { it > 0 },
+                            dubEpisodes = obj.optInt("dubEpisodes", 0).takeIf { it > 0 },
+                            episodeCount = obj.optInt("episodeCount", 0).takeIf { it > 0 }
                         )
                     )
                 }

@@ -1,12 +1,15 @@
 package com.xtsream.app.data
 
 import com.lagradost.cloudstream3.AnimeLoadResponse
+import com.lagradost.cloudstream3.AnimeSearchResponse
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainPageData
+import com.lagradost.cloudstream3.MovieSearchResponse
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
+import com.lagradost.cloudstream3.TvSeriesSearchResponse
 import com.lagradost.cloudstream3.TvType
 
 data class MediaCardItem(
@@ -16,8 +19,15 @@ data class MediaCardItem(
     val posterUrl: String?,
     val posterHeaders: Map<String, String> = emptyMap(),
     val type: String = "",
+    val shortType: String = "",
     val quality: String? = null,
     val score: String? = null,
+    val year: Int? = null,
+    val hasSub: Boolean = false,
+    val hasDub: Boolean = false,
+    val subEpisodes: Int? = null,
+    val dubEpisodes: Int? = null,
+    val episodeCount: Int? = null,
     val isHorizontal: Boolean = false
 )
 
@@ -80,15 +90,47 @@ data class MetaUiData(
 
 fun SearchResponse.toMediaCardItem(isHorizontal: Boolean = false): MediaCardItem {
     val formattedScore = runCatching { score?.toStringNull(0.1, 10, 1) }.getOrNull()
+    var hasSub = false
+    var hasDub = false
+    var subEps: Int? = null
+    var dubEps: Int? = null
+    var epCount: Int? = null
+    var yearVal: Int? = null
+
+    when (this) {
+        is AnimeSearchResponse -> {
+            yearVal = year
+            val statuses = dubStatus.orEmpty()
+            hasSub = DubStatus.Subbed in statuses || (episodes[DubStatus.Subbed] ?: 0) > 0
+            hasDub = DubStatus.Dubbed in statuses || (episodes[DubStatus.Dubbed] ?: 0) > 0
+            subEps = episodes[DubStatus.Subbed]?.takeIf { it > 0 }
+            dubEps = episodes[DubStatus.Dubbed]?.takeIf { it > 0 }
+        }
+        is TvSeriesSearchResponse -> {
+            yearVal = year
+            epCount = episodes?.takeIf { it > 0 }
+        }
+        is MovieSearchResponse -> {
+            yearVal = year
+        }
+    }
+
     return MediaCardItem(
         title = name.trim(),
         url = url,
         apiName = apiName,
         posterUrl = posterUrl,
         posterHeaders = posterHeaders ?: emptyMap(),
-        type = type?.name ?: "",
+        type = type?.let { formatTvType(it) } ?: "",
+        shortType = type?.let { formatShortTvType(it) } ?: "",
         quality = quality?.name,
         score = formattedScore,
+        year = yearVal,
+        hasSub = hasSub,
+        hasDub = hasDub,
+        subEpisodes = subEps,
+        dubEpisodes = dubEps,
+        episodeCount = epCount,
         isHorizontal = isHorizontal
     )
 }
@@ -113,7 +155,9 @@ fun LoadResponse.toMetaUiData(): MetaUiData {
     when (this) {
         is TvSeriesLoadResponse -> {
             showStatusLabel = showStatus?.name
-            val seasonNameMap = seasonNames.orEmpty().associate { it.season to (it.name ?: "Season ${it.displaySeason ?: it.season}") }
+            val seasonNameMap = seasonNames.orEmpty().associate {
+                it.season to (it.name ?: "Season ${it.displaySeason ?: it.season}")
+            }
             val grouped = groupEpisodesIntoSeasons(episodes, seasonNameMap)
             if (grouped.isNotEmpty()) {
                 dubMap["Default"] = grouped
@@ -121,7 +165,9 @@ fun LoadResponse.toMetaUiData(): MetaUiData {
         }
         is AnimeLoadResponse -> {
             showStatusLabel = showStatus?.name
-            val seasonNameMap = seasonNames.orEmpty().associate { it.season to (it.name ?: "Season ${it.displaySeason ?: it.season}") }
+            val seasonNameMap = seasonNames.orEmpty().associate {
+                it.season to (it.name ?: "Season ${it.displaySeason ?: it.season}")
+            }
             episodes.forEach { (dubStatus, epList) ->
                 if (epList.isNotEmpty()) {
                     val label = when (dubStatus) {
@@ -138,7 +184,13 @@ fun LoadResponse.toMetaUiData(): MetaUiData {
         }
     }
 
-    val isMovieLike = dubMap.isEmpty() && (type == TvType.Movie || type == TvType.AnimeMovie || type == TvType.OVA || type == TvType.Documentary || type == TvType.Live)
+    val isMovieLike = dubMap.isEmpty() && (
+        type == TvType.Movie ||
+            type == TvType.AnimeMovie ||
+            type == TvType.OVA ||
+            type == TvType.Documentary ||
+            type == TvType.Live
+        )
 
     return MetaUiData(
         title = name.trim(),
@@ -203,10 +255,23 @@ fun formatTvType(type: TvType): String = when (type) {
     TvType.Movie -> "Movie"
     TvType.Anime -> "Anime"
     TvType.AnimeMovie -> "Anime Movie"
-    TvType.AsianDrama -> "Asian Drama"
+    TvType.AsianDrama -> "Drama"
     TvType.Cartoon -> "Cartoon"
-    TvType.Documentary -> "Documentary"
+    TvType.Documentary -> "Doc"
     TvType.Live -> "Live"
     TvType.OVA -> "OVA"
     else -> type.name
+}
+
+fun formatShortTvType(type: TvType): String = when (type) {
+    TvType.TvSeries -> "TV"
+    TvType.Movie -> "MOVIE"
+    TvType.Anime -> "ANIME"
+    TvType.AnimeMovie -> "MOVIE"
+    TvType.AsianDrama -> "DRAMA"
+    TvType.Cartoon -> "TOON"
+    TvType.Documentary -> "DOC"
+    TvType.Live -> "LIVE"
+    TvType.OVA -> "OVA"
+    else -> type.name.uppercase().take(6)
 }

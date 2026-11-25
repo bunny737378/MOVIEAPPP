@@ -1,34 +1,22 @@
 package com.xtsream.app.ui.components
 
 import android.content.Context
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
@@ -36,17 +24,21 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
@@ -57,6 +49,7 @@ import coil3.request.crossfade
 import com.lagradost.cloudstream3.MainAPI
 import com.xtsream.app.data.MediaCardItem
 import com.xtsream.app.ui.theme.AppColors
+import kotlin.math.min
 
 enum class MainTab(
     val label: String,
@@ -65,31 +58,45 @@ enum class MainTab(
 ) {
     Home("Home", Icons.Filled.Home, Icons.Outlined.Home),
     Search("Search", Icons.Filled.Search, Icons.Outlined.Search),
-    Library("Library", Icons.Filled.Bookmarks, Icons.Outlined.Bookmarks),
+    Library("Library", AppIcons.Bookmarks, AppIcons.BookmarksOutlined),
     Settings("Settings", Icons.Filled.Settings, Icons.Outlined.Settings)
 }
 
-fun Modifier.shimmerEffect(): Modifier = composed {
-    val transition = rememberInfiniteTransition(label = "shimmer")
-    val translateAnim by transition.animateFloat(
-        initialValue = -300f,
-        targetValue = 900f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "shimmerOffset"
+/**
+ * Standard Material 3 indeterminate spinner used across all loading states.
+ */
+@Composable
+fun M3LoadingView(
+    modifier: Modifier = Modifier,
+    size: Dp = 36.dp
+) {
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(size),
+            color = AppColors.Primary,
+            trackColor = AppColors.SurfaceElevated,
+            strokeWidth = 3.dp,
+            strokeCap = StrokeCap.Round
+        )
+    }
+}
+
+@Composable
+fun M3InlineSpinner(
+    modifier: Modifier = Modifier,
+    size: Dp = 20.dp,
+    color: Color = AppColors.Primary
+) {
+    CircularProgressIndicator(
+        modifier = modifier.size(size),
+        color = color,
+        trackColor = color.copy(alpha = 0.2f),
+        strokeWidth = 2.2.dp,
+        strokeCap = StrokeCap.Round
     )
-    val brush = Brush.linearGradient(
-        colors = listOf(
-            Color(0xFF181C26),
-            Color(0xFF262C3B),
-            Color(0xFF181C26)
-        ),
-        start = Offset(translateAnim, 0f),
-        end = Offset(translateAnim + 300f, 220f)
-    )
-    background(brush)
 }
 
 fun buildCoilRequest(
@@ -99,7 +106,7 @@ fun buildCoilRequest(
 ): ImageRequest {
     val builder = ImageRequest.Builder(context)
         .data(url)
-        .crossfade(true)
+        .crossfade(220)
     if (headers.isNotEmpty()) {
         val nh = NetworkHeaders.Builder().apply {
             headers.forEach { (k, v) ->
@@ -112,7 +119,8 @@ fun buildCoilRequest(
 }
 
 /**
- * Normal anchored bottom navigation bar (non-floating), edge-to-edge aware.
+ * Clean anchored bottom navigation bar (non-floating), YouTube / CloudStream / Metrolist style:
+ * pure dark surface, hairline top divider, crisp white selected icon, zero glass pills.
  */
 @Composable
 fun AppBottomBar(
@@ -124,17 +132,17 @@ fun AppBottomBar(
             .fillMaxWidth()
             .background(AppColors.NavBarBg)
     ) {
-        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Border)
+        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .height(64.dp),
+                .height(60.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             MainTab.entries.forEach { tab ->
                 val isSelected = tab == selectedTab
-                val contentColor = if (isSelected) AppColors.Accent else AppColors.TextMuted
+                val tint = if (isSelected) AppColors.Primary else AppColors.TextMuted
 
                 Column(
                     modifier = Modifier
@@ -147,26 +155,18 @@ fun AppBottomBar(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(if (isSelected) AppColors.AccentDim else Color.Transparent)
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (isSelected) tab.selectedIcon else tab.unselectedIcon,
-                            contentDescription = tab.label,
-                            tint = contentColor,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
+                    Icon(
+                        imageVector = if (isSelected) tab.selectedIcon else tab.unselectedIcon,
+                        contentDescription = tab.label,
+                        tint = tint,
+                        modifier = Modifier.size(23.dp)
+                    )
                     Spacer(modifier = Modifier.height(3.dp))
                     Text(
                         text = tab.label,
-                        color = if (isSelected) AppColors.TextPrimary else AppColors.TextMuted,
-                        fontSize = 11.sp,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                        color = tint,
+                        fontSize = 10.sp,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                         maxLines = 1
                     )
                 }
@@ -175,6 +175,104 @@ fun AppBottomBar(
     }
 }
 
+/**
+ * Architectural Inverted-Fillet / Corner Cutout Shape for poster art.
+ * Carves clean concave notches ONLY on corners where badge data exists,
+ * so metadata integrates directly into the card's silhouette rather than floating over art.
+ */
+private fun notchedPosterShape(
+    cornerRadiusPx: Float,
+    notchRadiusPx: Float,
+    topLeftNotchW: Float,
+    topLeftNotchH: Float,
+    topRightNotchW: Float,
+    topRightNotchH: Float,
+    bottomLeftNotchW: Float,
+    bottomLeftNotchH: Float
+): Shape = GenericShape { size, _ ->
+    val w = size.width
+    val h = size.height
+    val r = min(cornerRadiusPx, min(w, h) / 4f)
+    val nr = min(notchRadiusPx, r)
+
+    // Clamp notch dimensions safely so adjacent corners never collide
+    val tlW = if (topLeftNotchW > 0f && topLeftNotchH > 0f) min(topLeftNotchW, w * 0.46f) else 0f
+    val tlH = if (tlW > 0f) min(topLeftNotchH, h * 0.25f) else 0f
+
+    val trW = if (topRightNotchW > 0f && topRightNotchH > 0f) min(topRightNotchW, w * 0.46f) else 0f
+    val trH = if (trW > 0f) min(topRightNotchH, h * 0.25f) else 0f
+
+    val blW = if (bottomLeftNotchW > 0f && bottomLeftNotchH > 0f) min(bottomLeftNotchW, w * 0.78f) else 0f
+    val blH = if (blW > 0f) min(bottomLeftNotchH, h * 0.25f) else 0f
+
+    // Start along top edge
+    if (tlW > 0f) {
+        moveTo(tlW + nr, 0f)
+    } else {
+        moveTo(r, 0f)
+    }
+
+    // Top-right corner
+    if (trW > 0f) {
+        val xCut = w - trW
+        lineTo(xCut - nr, 0f)
+        // Convex outer fillet into vertical drop
+        arcTo(Rect(xCut - 2 * nr, 0f, xCut, 2 * nr), -90f, 90f, false)
+        lineTo(xCut, trH - nr)
+        // Concave inner corner turning right
+        arcTo(Rect(xCut, trH - 2 * nr, xCut + 2 * nr, trH), 180f, -90f, false)
+        lineTo(w - nr, trH)
+        // Convex fillet turning down along right edge
+        arcTo(Rect(w - 2 * nr, trH, w, trH + 2 * nr), -90f, 90f, false)
+    } else {
+        lineTo(w - r, 0f)
+        arcTo(Rect(w - 2 * r, 0f, w, 2 * r), -90f, 90f, false)
+    }
+
+    // Right edge -> Bottom-right smooth corner
+    lineTo(w, h - r)
+    arcTo(Rect(w - 2 * r, h - 2 * r, w, h), 0f, 90f, false)
+
+    // Bottom edge -> Bottom-left corner (optional SUB/DUB cutout)
+    if (blW > 0f) {
+        lineTo(blW + nr, h)
+        // Convex fillet going up into notch
+        arcTo(Rect(blW, h - 2 * nr, blW + 2 * nr, h), 90f, 90f, false)
+        lineTo(blW, h - blH + nr)
+        // Concave inner corner turning left
+        arcTo(Rect(blW - 2 * nr, h - blH, blW, h - blH + 2 * nr), 0f, -90f, false)
+        lineTo(nr, h - blH)
+        // Convex fillet turning up along left edge
+        arcTo(Rect(0f, h - blH - 2 * nr, 2 * nr, h - blH), 90f, 90f, false)
+    } else {
+        lineTo(r, h)
+        arcTo(Rect(0f, h - 2 * r, 2 * r, h), 90f, 90f, false)
+    }
+
+    // Left edge -> Top-left corner (optional rating cutout)
+    if (tlW > 0f) {
+        lineTo(0f, tlH + nr)
+        // Convex fillet turning right into notch
+        arcTo(Rect(0f, tlH, 2 * nr, tlH + 2 * nr), 180f, 90f, false)
+        lineTo(tlW - nr, tlH)
+        // Concave inner corner turning up
+        arcTo(Rect(tlW - 2 * nr, tlH - 2 * nr, tlW, tlH), 90f, -90f, false)
+        lineTo(tlW, nr)
+        // Convex fillet returning to top edge
+        arcTo(Rect(tlW, 0f, tlW + 2 * nr, 2 * nr), 180f, 90f, false)
+    } else {
+        lineTo(0f, r)
+        arcTo(Rect(0f, 0f, 2 * r, 2 * r), 180f, 90f, false)
+    }
+
+    close()
+}
+
+/**
+ * Notched Corner-Cutout Poster Card:
+ * Dynamically carves inverted-radius corner cutouts ONLY for metadata returned by the provider
+ * (Rating top-left, Type/Quality top-right, Sub/Dub or Episode count bottom-left).
+ */
 @Composable
 fun PosterCard(
     item: MediaCardItem,
@@ -183,60 +281,83 @@ fun PosterCard(
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val horizontal = forceHorizontal || item.isHorizontal
     val aspectRatio = if (horizontal) 16f / 9f else 2f / 3f
 
+    val ratingText = item.score?.takeIf { it.isNotBlank() }
+    val typeText = item.shortType.takeIf { it.isNotBlank() }
+        ?: item.quality?.takeIf { it.isNotBlank() }
+        ?: item.type.takeIf { it.isNotBlank() }?.uppercase()?.take(6)
+
+    val hasBottomData = item.hasSub || item.hasDub || (item.episodeCount != null && item.episodeCount > 0)
+
+    var tlSize by remember(ratingText) { mutableStateOf(IntSize.Zero) }
+    var trSize by remember(typeText) { mutableStateOf(IntSize.Zero) }
+    var blSize by remember(item.hasSub, item.hasDub, item.subEpisodes, item.dubEpisodes, item.episodeCount) {
+        mutableStateOf(IntSize.Zero)
+    }
+
+    val cornerPx = with(density) { 12.dp.toPx() }
+    val notchPx = with(density) { 8.dp.toPx() }
+    val gapPx = with(density) { 4.dp.toPx() }
+
+    val posterShape = remember(tlSize, trSize, blSize, cornerPx, notchPx) {
+        notchedPosterShape(
+            cornerRadiusPx = cornerPx,
+            notchRadiusPx = notchPx,
+            topLeftNotchW = if (tlSize.width > 0) tlSize.width + gapPx else 0f,
+            topLeftNotchH = if (tlSize.height > 0) tlSize.height + gapPx else 0f,
+            topRightNotchW = if (trSize.width > 0) trSize.width + gapPx else 0f,
+            topRightNotchH = if (trSize.height > 0) trSize.height + gapPx else 0f,
+            bottomLeftNotchW = if (blSize.width > 0) blSize.width + gapPx else 0f,
+            bottomLeftNotchH = if (blSize.height > 0) blSize.height + gapPx else 0f
+        )
+    }
+
     Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .clickable { onClick() }
+        modifier = modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null
+        ) { onClick() }
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(aspectRatio)
-                .clip(RoundedCornerShape(10.dp))
-                .background(AppColors.SurfaceCard)
-                .border(0.5.dp, AppColors.Border, RoundedCornerShape(10.dp))
         ) {
-            if (!item.posterUrl.isNullOrBlank()) {
-                var loaded by remember(item.posterUrl) { mutableStateOf(false) }
-                if (!loaded) {
-                    Box(modifier = Modifier.fillMaxSize().shimmerEffect())
-                }
-                AsyncImage(
-                    model = buildCoilRequest(context, item.posterUrl, item.posterHeaders),
-                    contentDescription = item.title,
-                    contentScale = ContentScale.Crop,
-                    onSuccess = { loaded = true },
-                    onError = { loaded = true },
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(AppColors.SurfaceElevated),
-                    contentAlignment = Alignment.Center
-                ) {
+            // Poster image clipped to the dynamic corner-cutout shape
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(posterShape)
+                    .background(AppColors.SurfaceCard),
+                contentAlignment = Alignment.Center
+            ) {
+                if (!item.posterUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = buildCoilRequest(context, item.posterUrl, item.posterHeaders),
+                        contentDescription = item.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
                     Icon(
-                        imageVector = Icons.Filled.Movie,
+                        imageVector = AppIcons.Movie,
                         contentDescription = null,
                         tint = AppColors.TextMuted,
-                        modifier = Modifier.size(28.dp)
+                        modifier = Modifier.size(26.dp)
                     )
                 }
             }
 
-            // Score badge (top-left)
-            if (!item.score.isNullOrBlank()) {
+            // Top-Left Cutout Slot: Rating
+            if (ratingText != null) {
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(6.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color.Black.copy(alpha = 0.72f))
-                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                        .onSizeChanged { tlSize = it }
+                        .padding(end = 3.dp, bottom = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
@@ -247,35 +368,76 @@ fun PosterCard(
                     )
                     Spacer(modifier = Modifier.width(2.dp))
                     Text(
-                        text = item.score,
-                        color = Color.White,
+                        text = ratingText,
+                        color = AppColors.TextPrimary,
                         fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
                     )
                 }
             }
 
-            // Quality badge (top-right)
-            if (!item.quality.isNullOrBlank()) {
+            // Top-Right Cutout Slot: Type (MOVIE / TV / ANIME / etc.)
+            if (typeText != null) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(6.dp)
-                        .clip(RoundedCornerShape(5.dp))
-                        .background(AppColors.Accent.copy(alpha = 0.9f))
-                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                        .onSizeChanged { trSize = it }
+                        .padding(start = 3.dp, bottom = 2.dp)
                 ) {
                     Text(
-                        text = item.quality,
-                        color = Color(0xFF071326),
+                        text = typeText,
+                        color = AppColors.TextSecondary,
                         fontSize = 9.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.5.sp,
+                        maxLines = 1
                     )
+                }
+            }
+
+            // Bottom-Left Cutout Slot: SUB / DUB / Episodes
+            if (hasBottomData) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .onSizeChanged { blSize = it }
+                        .padding(top = 2.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    if (item.hasSub) {
+                        Text(
+                            text = if (item.subEpisodes != null) "SUB ${item.subEpisodes}" else "SUB",
+                            color = AppColors.SubGreen,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1
+                        )
+                    }
+                    if (item.hasDub) {
+                        Text(
+                            text = if (item.dubEpisodes != null) "DUB ${item.dubEpisodes}" else "DUB",
+                            color = AppColors.DubBlue,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1
+                        )
+                    }
+                    if (!item.hasSub && !item.hasDub && item.episodeCount != null) {
+                        Text(
+                            text = "EP ${item.episodeCount}",
+                            color = AppColors.TextSecondary,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                    }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(7.dp))
 
         Text(
             text = item.title,
@@ -290,30 +452,9 @@ fun PosterCard(
     }
 }
 
-@Composable
-fun PosterCardSkeleton(
-    modifier: Modifier = Modifier,
-    horizontal: Boolean = false
-) {
-    Column(modifier = modifier) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(if (horizontal) 16f / 9f else 2f / 3f)
-                .clip(RoundedCornerShape(10.dp))
-                .shimmerEffect()
-        )
-        Spacer(modifier = Modifier.height(7.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.8f)
-                .height(12.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .shimmerEffect()
-        )
-    }
-}
-
+/**
+ * Clean borderless editorial list row (YouTube / Prime Video style — no heavy card boxes).
+ */
 @Composable
 fun MediaListRowCard(
     item: MediaCardItem,
@@ -321,81 +462,84 @@ fun MediaListRowCard(
     trailingContent: (@Composable () -> Unit)? = null
 ) {
     val context = LocalContext.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(AppColors.SurfaceCard)
-            .border(0.5.dp, AppColors.Border, RoundedCornerShape(12.dp))
-            .clickable { onClick() }
-            .padding(10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
             modifier = Modifier
-                .width(64.dp)
-                .aspectRatio(2f / 3f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(AppColors.SurfaceElevated),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .clickable { onClick() }
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            if (!item.posterUrl.isNullOrBlank()) {
-                AsyncImage(
-                    model = buildCoilRequest(context, item.posterUrl, item.posterHeaders),
-                    contentDescription = item.title,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Icon(Icons.Filled.Movie, null, tint = AppColors.TextMuted, modifier = Modifier.size(22.dp))
-            }
-        }
-
-        Spacer(modifier = Modifier.width(12.dp))
-
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = item.title,
-                color = AppColors.TextPrimary,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Box(
+                modifier = Modifier
+                    .width(56.dp)
+                    .aspectRatio(2f / 3f)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(AppColors.SurfaceCard),
+                contentAlignment = Alignment.Center
             ) {
-                if (item.apiName.isNotBlank()) {
-                    Text(
-                        text = item.apiName,
-                        color = AppColors.Accent,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold
+                if (!item.posterUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = buildCoilRequest(context, item.posterUrl, item.posterHeaders),
+                        contentDescription = item.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
                     )
+                } else {
+                    Icon(AppIcons.Movie, null, tint = AppColors.TextMuted, modifier = Modifier.size(20.dp))
                 }
-                if (item.type.isNotBlank()) {
-                    Text(
-                        text = "• ${item.type}",
-                        color = AppColors.TextSecondary,
-                        fontSize = 11.sp
-                    )
-                }
-                if (!item.score.isNullOrBlank()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Star, null, tint = AppColors.Gold, modifier = Modifier.size(12.dp))
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Text(item.score, color = AppColors.Gold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.title,
+                    color = AppColors.TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (!item.score.isNullOrBlank()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.Star, null, tint = AppColors.Gold, modifier = Modifier.size(12.dp))
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text(item.score, color = AppColors.Gold, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    val subline = listOfNotNull(
+                        item.type.takeIf { it.isNotBlank() },
+                        item.year?.takeIf { it > 0 }?.toString(),
+                        item.apiName.takeIf { it.isNotBlank() }
+                    ).joinToString(" • ")
+                    if (subline.isNotBlank()) {
+                        Text(
+                            text = subline,
+                            color = AppColors.TextSecondary,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
-        }
 
-        if (trailingContent != null) {
-            Spacer(modifier = Modifier.width(8.dp))
-            trailingContent()
+            if (trailingContent != null) {
+                Spacer(modifier = Modifier.width(8.dp))
+                trailingContent()
+            }
         }
+        HorizontalDivider(
+            modifier = Modifier.padding(start = 86.dp, end = 16.dp),
+            thickness = 0.5.dp,
+            color = AppColors.Divider
+        )
     }
 }
 
@@ -407,100 +551,48 @@ fun EmptyNoProvidersView(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 28.dp),
+            .padding(horizontal = 32.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Box(
-                modifier = Modifier
-                    .size(76.dp)
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(AppColors.AccentDim)
-                    .border(1.dp, AppColors.Accent.copy(alpha = 0.35f), RoundedCornerShape(22.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Extension,
-                    contentDescription = null,
-                    tint = AppColors.Accent,
-                    modifier = Modifier.size(38.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(22.dp))
-
+            Icon(
+                imageVector = AppIcons.Extension,
+                contentDescription = null,
+                tint = AppColors.TextMuted,
+                modifier = Modifier.size(48.dp)
+            )
+            Spacer(modifier = Modifier.height(18.dp))
             Text(
-                text = "Welcome to MOVIEAPPP",
+                text = "No Providers Installed",
                 color = AppColors.TextPrimary,
-                fontSize = 22.sp,
+                fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Add a CloudStream repository (like megarepo or any repo shortname) and install an extension to browse movies, shows, and anime.",
+                text = "Add a CloudStream repository or .cs3 extension in Providers to browse movies, shows, and anime.",
                 color = AppColors.TextSecondary,
                 fontSize = 14.sp,
                 lineHeight = 20.sp,
                 textAlign = TextAlign.Center
             )
-
             Spacer(modifier = Modifier.height(24.dp))
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(AppColors.SurfaceCard)
-                    .border(0.5.dp, AppColors.Border, RoundedCornerShape(14.dp))
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                StepRow("1", "Open Settings → Providers")
-                StepRow("2", "Enter a CloudStream repo shortname or URL")
-                StepRow("3", "Tap Install on any extension to load Home & Search")
-            }
-
-            Spacer(modifier = Modifier.height(26.dp))
-
             Button(
                 onClick = onOpenProviders,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = AppColors.Accent,
-                    contentColor = Color(0xFF071326)
+                    containerColor = AppColors.Primary,
+                    contentColor = Color.Black
                 ),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.height(46.dp)
             ) {
-                Icon(Icons.Filled.Extension, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Add Provider Repository", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Text("Open Providers", fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
         }
-    }
-}
-
-@Composable
-private fun StepRow(num: String, text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(22.dp)
-                .clip(CircleShape)
-                .background(AppColors.AccentDim),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(num, color = AppColors.Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(text, color = AppColors.TextPrimary, fontSize = 13.sp)
     }
 }
 
@@ -513,15 +605,15 @@ fun ErrorStateView(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .padding(28.dp),
+            .padding(32.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
-                imageVector = Icons.Filled.CloudOff,
+                imageVector = AppIcons.CloudOff,
                 contentDescription = null,
                 tint = AppColors.TextMuted,
-                modifier = Modifier.size(46.dp)
+                modifier = Modifier.size(42.dp)
             )
             Spacer(modifier = Modifier.height(14.dp))
             Text(
@@ -534,12 +626,12 @@ fun ErrorStateView(
             Spacer(modifier = Modifier.height(18.dp))
             OutlinedButton(
                 onClick = onRetry,
-                border = BorderStroke(1.dp, AppColors.Accent),
+                border = BorderStroke(1.dp, AppColors.BorderStrong),
                 shape = RoundedCornerShape(10.dp)
             ) {
-                Icon(Icons.Filled.Refresh, null, tint = AppColors.Accent, modifier = Modifier.size(16.dp))
+                Icon(Icons.Filled.Refresh, null, tint = AppColors.TextPrimary, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Retry", color = AppColors.Accent, fontWeight = FontWeight.SemiBold)
+                Text("Retry", color = AppColors.TextPrimary, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -562,11 +654,12 @@ fun ProviderPickerSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp)
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -580,60 +673,58 @@ fun ProviderPickerSheet(
                     onDismiss()
                     onManageProviders()
                 }) {
-                    Text("Manage", color = AppColors.Accent, fontWeight = FontWeight.SemiBold)
+                    Text("Manage", color = AppColors.TextPrimary, fontWeight = FontWeight.SemiBold)
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+            HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
 
             LazyColumn(
-                modifier = Modifier.heightIn(max = 380.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier.heightIn(max = 380.dp)
             ) {
                 items(providers, key = { it.name }) { api ->
                     val isSelected = activeProvider?.name == api.name
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(if (isSelected) AppColors.AccentDim else AppColors.SurfaceCard)
-                            .border(
-                                1.dp,
-                                if (isSelected) AppColors.Accent.copy(alpha = 0.6f) else AppColors.Border,
-                                RoundedCornerShape(12.dp)
-                            )
                             .clickable {
                                 onSelect(api)
                                 onDismiss()
                             }
-                            .padding(horizontal = 14.dp, vertical = 14.dp),
+                            .padding(horizontal = 20.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = api.name,
-                                color = AppColors.TextPrimary,
+                                color = if (isSelected) AppColors.Primary else AppColors.TextPrimary,
                                 fontSize = 15.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                             )
                             val meta = listOfNotNull(
                                 api.lang.uppercase().takeIf { it.isNotBlank() },
                                 api.supportedTypes.take(3).joinToString(" • ") { it.name }.takeIf { it.isNotBlank() }
-                            ).joinToString("  |  ")
+                            ).joinToString("  •  ")
                             if (meta.isNotBlank()) {
                                 Spacer(modifier = Modifier.height(2.dp))
-                                Text(meta, color = AppColors.TextSecondary, fontSize = 11.sp)
+                                Text(meta, color = AppColors.TextMuted, fontSize = 12.sp)
                             }
                         }
                         if (isSelected) {
                             Icon(
                                 imageVector = Icons.Filled.Check,
                                 contentDescription = "Selected",
-                                tint = AppColors.Accent,
+                                tint = AppColors.Primary,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
                     }
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 20.dp),
+                        thickness = 0.5.dp,
+                        color = AppColors.Divider
+                    )
                 }
             }
         }

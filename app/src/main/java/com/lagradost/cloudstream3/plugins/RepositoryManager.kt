@@ -244,6 +244,10 @@ object RepositoryManager {
         return getKey<Array<RepositoryData>>(REPOSITORIES_KEY) ?: emptyArray()
     }
 
+    // Listener notified when any .cs3 plugin or UI modifies repositories
+    @Volatile
+    var onRepositoriesChanged: (() -> Unit)? = null
+
     // Don't want to read before we write in another thread
     private val repoLock = Mutex()
     suspend fun addRepository(repository: RepositoryData) {
@@ -259,6 +263,7 @@ object RepositoryManager {
             }
             setKey(REPOSITORIES_KEY, currentRepos)
         }
+        onRepositoriesChanged?.invoke()
     }
 
     /**
@@ -289,5 +294,6 @@ object RepositoryManager {
         }
 
         PluginManager.deleteRepositoryData(file.absolutePath)
+        onRepositoriesChanged?.invoke()
     }
 }

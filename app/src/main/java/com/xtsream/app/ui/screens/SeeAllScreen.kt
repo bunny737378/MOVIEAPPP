@@ -12,8 +12,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ViewList
-import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,6 +22,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xtsream.app.data.MediaCardItem
+import com.xtsream.app.ui.components.AppIcons
+import com.xtsream.app.ui.components.M3InlineSpinner
 import com.xtsream.app.ui.components.MediaListRowCard
 import com.xtsream.app.ui.components.PosterCard
 import com.xtsream.app.ui.theme.AppColors
@@ -61,7 +61,7 @@ fun SeeAllScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = AppColors.TextPrimary)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = AppColors.Primary)
             }
             Column(modifier = Modifier.weight(1f).padding(horizontal = 4.dp)) {
                 Text(
@@ -75,7 +75,7 @@ fun SeeAllScreen(
                 if (state.subtitle.isNotBlank()) {
                     Text(
                         text = state.subtitle,
-                        color = AppColors.TextSecondary,
+                        color = AppColors.TextMuted,
                         fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -84,14 +84,14 @@ fun SeeAllScreen(
             }
             IconButton(onClick = { vm.toggleLayoutMode() }) {
                 Icon(
-                    imageVector = if (state.isGridView) Icons.AutoMirrored.Filled.ViewList else Icons.Filled.GridView,
+                    imageVector = if (state.isGridView) AppIcons.ViewList else AppIcons.GridView,
                     contentDescription = "Toggle view",
-                    tint = AppColors.TextPrimary
+                    tint = AppColors.Primary
                 )
             }
         }
 
-        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Border)
+        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
 
         if (state.isGridView) {
             val gridState = rememberLazyGridState()
@@ -110,7 +110,7 @@ fun SeeAllScreen(
                 columns = GridCells.Fixed(3),
                 contentPadding = PaddingValues(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(state.items, key = { it.url }) { item ->
@@ -119,7 +119,7 @@ fun SeeAllScreen(
                 if (state.isLoadingMore) {
                     item(span = { GridItemSpan(3) }) {
                         Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = AppColors.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                            M3InlineSpinner(size = 24.dp)
                         }
                     }
                 }
@@ -138,8 +138,7 @@ fun SeeAllScreen(
 
             LazyColumn(
                 state = listState,
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(vertical = 8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(state.items, key = { it.url }) { item ->
@@ -148,7 +147,7 @@ fun SeeAllScreen(
                 if (state.isLoadingMore) {
                     item {
                         Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = AppColors.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                            M3InlineSpinner(size = 24.dp)
                         }
                     }
                 }

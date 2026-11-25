@@ -1,9 +1,7 @@
 package com.xtsream.app.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,17 +16,12 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Extension
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Update
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -48,8 +41,11 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.lagradost.cloudstream3.plugins.SitePlugin
 import com.lagradost.cloudstream3.ui.settings.extensions.RepositoryData
+import com.xtsream.app.engine.AddSourceResult
 import com.xtsream.app.engine.ExtensionController
 import com.xtsream.app.engine.InstalledExtensionInfo
+import com.xtsream.app.ui.components.AppIcons
+import com.xtsream.app.ui.components.M3InlineSpinner
 import com.xtsream.app.ui.components.buildCoilRequest
 import com.xtsream.app.ui.theme.AppColors
 import kotlinx.coroutines.delay
@@ -73,8 +69,8 @@ fun ProvidersScreen(
     val activeApi by ExtensionController.activeApi.collectAsState()
     val installingKeys by ExtensionController.installingKeys.collectAsState()
 
-    var repoInput by remember { mutableStateOf("") }
-    var isAddingRepo by remember { mutableStateOf(false) }
+    var sourceInput by remember { mutableStateOf("") }
+    var isAdding by remember { mutableStateOf(false) }
     var activeTab by remember { mutableIntStateOf(0) } // 0 = Repositories, 1 = Installed
     var expandedRepoUrl by remember { mutableStateOf<String?>(null) }
     var pluginFilterQuery by remember { mutableStateOf("") }
@@ -88,28 +84,42 @@ fun ProvidersScreen(
         }
     }
 
-    fun submitRepo() {
-        val raw = repoInput.trim()
-        if (raw.isBlank() || isAddingRepo) return
+    fun submitSource() {
+        val raw = sourceInput.trim()
+        if (raw.isBlank() || isAdding) return
         focusManager.clearFocus()
-        isAddingRepo = true
+        isAdding = true
         feedback = null
         scope.launch {
-            val result = ExtensionController.addRepositoryFromInput(raw)
-            isAddingRepo = false
-            result.onSuccess { fetched ->
-                repoInput = ""
-                activeTab = 0
-                expandedRepoUrl = fetched.repository.url
-                pluginFilterQuery = ""
-                val extra = if (fetched.addedChildRepos > 0) " + ${fetched.addedChildRepos} included repos" else ""
-                feedback = FeedbackMessage(
-                    text = "Added \"${fetched.repository.name}\" (${fetched.plugins.size} extensions$extra)",
-                    isError = false
-                )
+            val result = ExtensionController.addSourceFromInput(context, raw)
+            isAdding = false
+            result.onSuccess { res ->
+                sourceInput = ""
+                when (res) {
+                    is AddSourceResult.RepositoryAdded -> {
+                        activeTab = 0
+                        expandedRepoUrl = res.repository.url
+                        pluginFilterQuery = ""
+                        val extra = if (res.addedChildRepos > 0) " + ${res.addedChildRepos} repos" else ""
+                        feedback = FeedbackMessage(
+                            text = "Added \"${res.repository.name}\" (${res.plugins.size} extensions$extra)",
+                            isError = false
+                        )
+                    }
+
+                    is AddSourceResult.DirectPluginInstalled -> {
+                        activeTab = if (res.addedRepos > 0) 0 else 1
+                        val detail = when {
+                            res.addedRepos > 0 -> "Installed ${res.pluginName} & added ${res.addedRepos} repositories"
+                            res.addedApis.isNotEmpty() -> "Installed ${res.pluginName} (${res.addedApis.joinToString()})"
+                            else -> "Installed ${res.pluginName}"
+                        }
+                        feedback = FeedbackMessage(text = detail, isError = false)
+                    }
+                }
             }.onFailure { err ->
                 feedback = FeedbackMessage(
-                    text = err.message ?: "Failed to load repository \"$raw\"",
+                    text = err.message ?: "Failed to load \"$raw\"",
                     isError = true
                 )
             }
@@ -131,7 +141,7 @@ fun ProvidersScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = AppColors.TextPrimary)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = AppColors.Primary)
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -142,7 +152,7 @@ fun ProvidersScreen(
                 )
                 Text(
                     text = "${repositories.size} repositories • ${installedPlugins.size} installed",
-                    color = AppColors.TextSecondary,
+                    color = AppColors.TextMuted,
                     fontSize = 12.sp
                 )
             }
@@ -153,7 +163,7 @@ fun ProvidersScreen(
                             repositories.forEach { repo ->
                                 ExtensionController.loadRepositoryPlugins(repo, force = true)
                             }
-                            feedback = FeedbackMessage("Refreshed ${repositories.size} repository list(s)", false)
+                            feedback = FeedbackMessage("Refreshed ${repositories.size} repositories", false)
                         }
                     }
                 ) {
@@ -162,7 +172,7 @@ fun ProvidersScreen(
             }
         }
 
-        // Top Repository Shortname / URL Input Bar
+        // Top Input Bar: Shortname / repo.json / plugins.json / Direct .cs3 URL
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -177,34 +187,33 @@ fun ProvidersScreen(
                 Row(
                     modifier = Modifier
                         .weight(1f)
-                        .height(48.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .height(46.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(AppColors.SurfaceCard)
-                        .border(1.dp, AppColors.BorderStrong, RoundedCornerShape(12.dp))
                         .padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Link,
+                        imageVector = AppIcons.Link,
                         contentDescription = null,
-                        tint = AppColors.Accent,
+                        tint = AppColors.TextMuted,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     BasicTextField(
-                        value = repoInput,
-                        onValueChange = { repoInput = it },
+                        value = sourceInput,
+                        onValueChange = { sourceInput = it },
                         singleLine = true,
-                        enabled = !isAddingRepo,
+                        enabled = !isAdding,
                         textStyle = TextStyle(color = AppColors.TextPrimary, fontSize = 14.sp),
-                        cursorBrush = SolidColor(AppColors.Accent),
+                        cursorBrush = SolidColor(AppColors.Primary),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { submitRepo() }),
+                        keyboardActions = KeyboardActions(onDone = { submitSource() }),
                         modifier = Modifier.weight(1f),
                         decorationBox = { inner ->
-                            if (repoInput.isEmpty()) {
+                            if (sourceInput.isEmpty()) {
                                 Text(
-                                    text = "Repo shortname (e.g. megarepo) or URL",
+                                    text = "Shortname (megarepo), repo URL, or .cs3 link",
                                     color = AppColors.TextMuted,
                                     fontSize = 13.sp,
                                     maxLines = 1,
@@ -214,10 +223,10 @@ fun ProvidersScreen(
                             inner()
                         }
                     )
-                    if (repoInput.isNotEmpty() && !isAddingRepo) {
+                    if (sourceInput.isNotEmpty() && !isAdding) {
                         IconButton(
-                            onClick = { repoInput = "" },
-                            modifier = Modifier.size(26.dp)
+                            onClick = { sourceInput = "" },
+                            modifier = Modifier.size(24.dp)
                         ) {
                             Icon(Icons.Filled.Close, "Clear", tint = AppColors.TextMuted, modifier = Modifier.size(16.dp))
                         }
@@ -225,24 +234,20 @@ fun ProvidersScreen(
                 }
 
                 Button(
-                    onClick = { submitRepo() },
-                    enabled = repoInput.isNotBlank() && !isAddingRepo,
+                    onClick = { submitSource() },
+                    enabled = sourceInput.isNotBlank() && !isAdding,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = AppColors.Accent,
-                        contentColor = Color(0xFF071326),
-                        disabledContainerColor = AppColors.SurfaceElevated,
+                        containerColor = AppColors.Primary,
+                        contentColor = Color.Black,
+                        disabledContainerColor = AppColors.SurfaceCard,
                         disabledContentColor = AppColors.TextMuted
                     ),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 16.dp),
-                    modifier = Modifier.height(48.dp)
+                    modifier = Modifier.height(46.dp)
                 ) {
-                    if (isAddingRepo) {
-                        CircularProgressIndicator(
-                            color = AppColors.Accent,
-                            strokeWidth = 2.dp,
-                            modifier = Modifier.size(18.dp)
-                        )
+                    if (isAdding) {
+                        M3InlineSpinner(size = 18.dp, color = AppColors.Primary)
                     } else {
                         Icon(Icons.Filled.Add, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
@@ -250,15 +255,6 @@ fun ProvidersScreen(
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text(
-                text = "Supports CloudStream shortnames (megarepo, hexated, phisherrepo), !codes, and direct repo.json URLs.",
-                color = AppColors.TextMuted,
-                fontSize = 11.sp,
-                lineHeight = 15.sp
-            )
         }
 
         // Feedback Banner
@@ -270,62 +266,47 @@ fun ProvidersScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp)
                         .padding(bottom = 10.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(tint.copy(alpha = 0.14f))
-                        .border(0.5.dp, tint.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
-                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(AppColors.SurfaceCard)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = if (msg.isError) Icons.Filled.ErrorOutline else Icons.Filled.Check,
+                        imageVector = if (msg.isError) Icons.Filled.Warning else Icons.Filled.Check,
                         contentDescription = null,
                         tint = tint,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(17.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = msg.text,
                         color = AppColors.TextPrimary,
                         fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
                         modifier = Modifier.weight(1f)
                     )
-                    IconButton(
-                        onClick = { feedback = null },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(Icons.Filled.Close, "Dismiss", tint = AppColors.TextSecondary, modifier = Modifier.size(15.dp))
+                    IconButton(onClick = { feedback = null }, modifier = Modifier.size(22.dp)) {
+                        Icon(Icons.Filled.Close, "Dismiss", tint = AppColors.TextMuted, modifier = Modifier.size(15.dp))
                     }
                 }
             }
         }
 
-        // Sub-Tabs: Repositories / Installed
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 10.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(AppColors.SurfaceCard)
-                .border(0.5.dp, AppColors.Border, RoundedCornerShape(10.dp))
-                .padding(3.dp)
-        ) {
-            ProviderTabButton(
+        // Clean Underline Tabs (YouTube / CloudStream style)
+        Row(modifier = Modifier.fillMaxWidth()) {
+            ProviderUnderlineTab(
                 label = "Repositories (${repositories.size})",
                 selected = activeTab == 0,
                 modifier = Modifier.weight(1f),
                 onClick = { activeTab = 0 }
             )
-            ProviderTabButton(
+            ProviderUnderlineTab(
                 label = "Installed (${installedPlugins.size})",
                 selected = activeTab == 1,
                 modifier = Modifier.weight(1f),
                 onClick = { activeTab = 1 }
             )
         }
-
-        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Border)
+        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
 
         if (activeTab == 0) {
             if (repositories.isEmpty()) {
@@ -336,31 +317,17 @@ fun ProvidersScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(
-                            modifier = Modifier
-                                .size(64.dp)
-                                .clip(RoundedCornerShape(18.dp))
-                                .background(AppColors.SurfaceCard)
-                                .border(0.5.dp, AppColors.Border, RoundedCornerShape(18.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.FolderOpen,
-                                contentDescription = null,
-                                tint = AppColors.TextMuted,
-                                modifier = Modifier.size(32.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Icon(AppIcons.FolderOpen, null, tint = AppColors.TextMuted, modifier = Modifier.size(44.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
                         Text(
-                            text = "No Repositories Added Yet",
+                            text = "No Repositories Added",
                             color = AppColors.TextPrimary,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Type a CloudStream repo shortname like \"megarepo\" in the bar above and tap Add to list all its extensions.",
+                            text = "Enter a CloudStream repo shortname (e.g. megarepo), repo.json, plugins.json, or a direct .cs3 URL above.",
                             color = AppColors.TextSecondary,
                             fontSize = 13.sp,
                             lineHeight = 19.sp
@@ -370,8 +337,7 @@ fun ProvidersScreen(
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    contentPadding = PaddingValues(bottom = 24.dp)
                 ) {
                     items(repositories, key = { it.url }) { repo ->
                         val isExpanded = expandedRepoUrl == repo.url
@@ -384,7 +350,7 @@ fun ProvidersScreen(
                             }
                         }
 
-                        RepositoryCard(
+                        RepositoryFlatItem(
                             repo = repo,
                             isExpanded = isExpanded,
                             isLoading = isLoading,
@@ -436,7 +402,6 @@ fun ProvidersScreen(
                 }
             }
         } else {
-            // Installed Extensions Tab
             if (installedPlugins.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -445,7 +410,7 @@ fun ProvidersScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Filled.Extension, null, tint = AppColors.TextMuted, modifier = Modifier.size(44.dp))
+                        Icon(AppIcons.Extension, null, tint = AppColors.TextMuted, modifier = Modifier.size(44.dp))
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = "No Extensions Installed",
@@ -455,7 +420,7 @@ fun ProvidersScreen(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Open a repository in the Repositories tab and tap Install on any .cs3 extension.",
+                            text = "Install extensions from a repository or paste a direct .cs3 URL above.",
                             color = AppColors.TextSecondary,
                             fontSize = 13.sp
                         )
@@ -464,17 +429,16 @@ fun ProvidersScreen(
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    contentPadding = PaddingValues(bottom = 24.dp)
                 ) {
                     items(installedPlugins, key = { it.pluginData.filePath }) { info ->
-                        InstalledExtensionCard(
+                        InstalledExtensionFlatRow(
                             info = info,
                             activeApiName = activeApi?.name,
                             onSelectApi = { apiName ->
                                 loadedApis.firstOrNull { it.name == apiName }?.let { api ->
                                     ExtensionController.selectProvider(api)
-                                    feedback = FeedbackMessage("Active Home provider set to ${api.name}", false)
+                                    feedback = FeedbackMessage("Active provider: ${api.name}", false)
                                 }
                             },
                             onUninstall = {
@@ -494,7 +458,6 @@ fun ProvidersScreen(
         }
     }
 
-    // Confirm Repo Deletion Dialog
     repoPendingDelete?.let { repo ->
         AlertDialog(
             onDismissRequest = { repoPendingDelete = null },
@@ -502,9 +465,7 @@ fun ProvidersScreen(
             titleContentColor = AppColors.TextPrimary,
             textContentColor = AppColors.TextSecondary,
             title = { Text("Remove Repository?", fontWeight = FontWeight.Bold) },
-            text = {
-                Text("Remove \"${repo.name}\" and delete extensions downloaded from this repository?")
-            },
+            text = { Text("Remove \"${repo.name}\" and delete extensions downloaded from it?") },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -513,7 +474,7 @@ fun ProvidersScreen(
                         if (expandedRepoUrl == target.url) expandedRepoUrl = null
                         scope.launch {
                             ExtensionController.removeRepository(context, target)
-                            feedback = FeedbackMessage("Removed repository \"${target.name}\"", false)
+                            feedback = FeedbackMessage("Removed \"${target.name}\"", false)
                         }
                     }
                 ) {
@@ -530,31 +491,34 @@ fun ProvidersScreen(
 }
 
 @Composable
-private fun ProviderTabButton(
+private fun ProviderUnderlineTab(
     label: String,
     selected: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (selected) AppColors.Accent else Color.Transparent)
-            .clickable { onClick() }
-            .padding(vertical = 8.dp),
-        contentAlignment = Alignment.Center
+    Column(
+        modifier = modifier.clickable { onClick() },
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text = label,
-            color = if (selected) Color(0xFF071326) else AppColors.TextSecondary,
+            color = if (selected) AppColors.Primary else AppColors.TextMuted,
             fontSize = 13.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            modifier = Modifier.padding(vertical = 12.dp)
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.55f)
+                .height(2.dp)
+                .background(if (selected) AppColors.Primary else Color.Transparent)
         )
     }
 }
 
 @Composable
-private fun RepositoryCard(
+private fun RepositoryFlatItem(
     repo: RepositoryData,
     isExpanded: Boolean,
     isLoading: Boolean,
@@ -570,88 +534,67 @@ private fun RepositoryCard(
 ) {
     val context = LocalContext.current
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(AppColors.SurfaceCard)
-            .border(
-                width = if (isExpanded) 1.dp else 0.5.dp,
-                color = if (isExpanded) AppColors.Accent.copy(alpha = 0.45f) else AppColors.Border,
-                shape = RoundedCornerShape(14.dp)
-            )
-    ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable { onToggleExpand() }
-                .padding(14.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(AppColors.SurfaceElevated),
-                contentAlignment = Alignment.Center
-            ) {
-                if (!repo.iconUrl.isNullOrBlank()) {
-                    AsyncImage(
-                        model = buildCoilRequest(context, repo.iconUrl),
-                        contentDescription = repo.name,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Icon(Icons.Filled.Extension, null, tint = AppColors.Accent, modifier = Modifier.size(22.dp))
-                }
+            if (!repo.iconUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = buildCoilRequest(context, repo.iconUrl),
+                    contentDescription = repo.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(AppColors.SurfaceCard)
+                )
+            } else {
+                Icon(
+                    imageVector = AppIcons.Extension,
+                    contentDescription = null,
+                    tint = AppColors.TextSecondary,
+                    modifier = Modifier.size(24.dp)
+                )
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(14.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = repo.name.ifBlank { "Repository" },
                     color = AppColors.TextPrimary,
                     fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (!repo.description.isNullOrBlank()) {
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = repo.description!!,
-                        color = AppColors.TextSecondary,
-                        fontSize = 12.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                } else {
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = repo.url,
-                        color = AppColors.TextMuted,
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = repo.description?.takeIf { it.isNotBlank() } ?: repo.url,
+                    color = AppColors.TextMuted,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
 
             if (isExpanded) {
                 IconButton(onClick = onRefresh, modifier = Modifier.size(34.dp)) {
-                    Icon(Icons.Filled.Refresh, "Refresh repo", tint = AppColors.TextSecondary, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Filled.Refresh, "Refresh", tint = AppColors.TextSecondary, modifier = Modifier.size(18.dp))
                 }
             }
             IconButton(onClick = onDelete, modifier = Modifier.size(34.dp)) {
-                Icon(Icons.Filled.DeleteOutline, "Remove repo", tint = AppColors.TextMuted, modifier = Modifier.size(18.dp))
+                Icon(Icons.Filled.Delete, "Remove", tint = AppColors.TextMuted, modifier = Modifier.size(18.dp))
             }
             Icon(
-                imageVector = if (isExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                imageVector = if (isExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
                 contentDescription = null,
                 tint = AppColors.TextSecondary,
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier.size(20.dp)
             )
         }
 
@@ -661,23 +604,17 @@ private fun RepositoryCard(
                     .fillMaxWidth()
                     .background(AppColors.Surface)
             ) {
-                HorizontalDivider(thickness = 0.5.dp, color = AppColors.Border)
-
                 if (isLoading && plugins.isEmpty()) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(20.dp),
+                            .padding(22.dp),
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        CircularProgressIndicator(
-                            color = AppColors.Accent,
-                            strokeWidth = 2.dp,
-                            modifier = Modifier.size(20.dp)
-                        )
+                        M3InlineSpinner(size = 20.dp)
                         Spacer(modifier = Modifier.width(10.dp))
-                        Text("Fetching extension list...", color = AppColors.TextSecondary, fontSize = 13.sp)
+                        Text("Loading extensions...", color = AppColors.TextSecondary, fontSize = 13.sp)
                     }
                 } else if (plugins.isEmpty()) {
                     Box(
@@ -686,22 +623,17 @@ private fun RepositoryCard(
                             .padding(20.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = "No extensions found in this repository.",
-                            color = AppColors.TextMuted,
-                            fontSize = 13.sp
-                        )
+                        Text("No extensions found in this repository.", color = AppColors.TextMuted, fontSize = 13.sp)
                     }
                 } else {
                     if (plugins.size > 5) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                                .padding(horizontal = 16.dp, vertical = 10.dp)
                                 .height(38.dp)
-                                .clip(RoundedCornerShape(9.dp))
+                                .clip(RoundedCornerShape(8.dp))
                                 .background(AppColors.SurfaceCard)
-                                .border(0.5.dp, AppColors.Border, RoundedCornerShape(9.dp))
                                 .padding(horizontal = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -712,15 +644,11 @@ private fun RepositoryCard(
                                 onValueChange = onFilterChange,
                                 singleLine = true,
                                 textStyle = TextStyle(color = AppColors.TextPrimary, fontSize = 13.sp),
-                                cursorBrush = SolidColor(AppColors.Accent),
+                                cursorBrush = SolidColor(AppColors.Primary),
                                 modifier = Modifier.weight(1f),
                                 decorationBox = { inner ->
                                     if (filterQuery.isEmpty()) {
-                                        Text(
-                                            text = "Filter ${plugins.size} extensions...",
-                                            color = AppColors.TextMuted,
-                                            fontSize = 13.sp
-                                        )
+                                        Text("Filter ${plugins.size} extensions...", color = AppColors.TextMuted, fontSize = 13.sp)
                                     }
                                     inner()
                                 }
@@ -743,37 +671,32 @@ private fun RepositoryCard(
                         }
                     }
 
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        filtered.forEach { plugin ->
-                            val installKey = "${repo.url}::${plugin.internalName}"
-                            val isInstalling = installKey in installingKeys
-                            val installedVer = ExtensionController.installedVersion(repo.url, plugin)
-                            val isInstalled = ExtensionController.isPluginInstalled(repo.url, plugin)
-                            val hasUpdate = isInstalled && installedVer != null && plugin.version > installedVer
+                    filtered.forEach { plugin ->
+                        val installKey = "${repo.url}::${plugin.internalName}"
+                        val isInstalling = installKey in installingKeys
+                        val installedVer = ExtensionController.installedVersion(repo.url, plugin)
+                        val isInstalled = ExtensionController.isPluginInstalled(repo.url, plugin)
+                        val hasUpdate = isInstalled && installedVer != null && plugin.version > installedVer
 
-                            SitePluginRow(
-                                plugin = plugin,
-                                isInstalled = isInstalled,
-                                hasUpdate = hasUpdate,
-                                isInstalling = isInstalling,
-                                onInstall = { onInstall(plugin) },
-                                onUninstall = { onUninstall(plugin) }
-                            )
-                        }
+                        SitePluginFlatRow(
+                            plugin = plugin,
+                            isInstalled = isInstalled,
+                            hasUpdate = hasUpdate,
+                            isInstalling = isInstalling,
+                            onInstall = { onInstall(plugin) },
+                            onUninstall = { onUninstall(plugin) }
+                        )
                     }
                 }
             }
         }
+
+        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
     }
 }
 
 @Composable
-private fun SitePluginRow(
+private fun SitePluginFlatRow(
     plugin: SitePlugin,
     isInstalled: Boolean,
     hasUpdate: Boolean,
@@ -785,266 +708,197 @@ private fun SitePluginRow(
     val statusColor = when (plugin.status) {
         1 -> AppColors.Success
         2 -> AppColors.Warning
-        3 -> AppColors.Accent
+        3 -> AppColors.DubBlue
         else -> AppColors.Danger
     }
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(AppColors.SurfaceCard)
-            .border(0.5.dp, AppColors.Border, RoundedCornerShape(12.dp))
-            .padding(11.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
             modifier = Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .background(AppColors.SurfaceElevated),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             if (!plugin.iconUrl.isNullOrBlank()) {
                 AsyncImage(
                     model = buildCoilRequest(context, plugin.iconUrl),
                     contentDescription = plugin.name,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(AppColors.SurfaceCard)
                 )
             } else {
-                Icon(Icons.Filled.Extension, null, tint = AppColors.TextMuted, modifier = Modifier.size(20.dp))
+                Icon(AppIcons.Extension, null, tint = AppColors.TextMuted, modifier = Modifier.size(22.dp))
             }
-        }
 
-        Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(12.dp))
 
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(statusColor)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = plugin.name,
-                    color = AppColors.TextPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                if (!plugin.language.isNullOrBlank()) {
-                    Spacer(modifier = Modifier.width(6.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(AppColors.SurfaceElevated)
-                            .padding(horizontal = 5.dp, vertical = 1.dp)
-                    ) {
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(statusColor)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = plugin.name,
+                        color = AppColors.TextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (!plugin.language.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = plugin.language.uppercase(),
-                            color = AppColors.TextSecondary,
-                            fontSize = 9.sp,
+                            color = AppColors.TextMuted,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 }
+                val metaParts = buildList {
+                    if (plugin.version > 0) add("v${plugin.version}")
+                    val types = plugin.tvTypes.orEmpty().take(3)
+                    if (types.isNotEmpty()) add(types.joinToString(", "))
+                }
+                if (metaParts.isNotEmpty()) {
+                    Text(
+                        text = metaParts.joinToString(" • "),
+                        color = AppColors.TextMuted,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
 
-            val metaParts = buildList {
-                if (plugin.version > 0) add("v${plugin.version}")
-                val types = plugin.tvTypes.orEmpty().take(3)
-                if (types.isNotEmpty()) add(types.joinToString(", "))
-            }
-            if (metaParts.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = metaParts.joinToString(" • "),
-                    color = AppColors.TextMuted,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+            Spacer(modifier = Modifier.width(8.dp))
 
-            if (!plugin.description.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = plugin.description!!,
-                    color = AppColors.TextSecondary,
-                    fontSize = 11.sp,
-                    lineHeight = 14.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.width(8.dp))
-
-        if (isInstalling) {
-            Box(
-                modifier = Modifier.size(36.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(
-                    color = AppColors.Accent,
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        } else if (hasUpdate) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (isInstalling) {
+                Box(modifier = Modifier.size(34.dp), contentAlignment = Alignment.Center) {
+                    M3InlineSpinner(size = 18.dp)
+                }
+            } else if (hasUpdate) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onInstall) {
+                        Text("Update", color = AppColors.Warning, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    IconButton(onClick = onUninstall, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Filled.Delete, "Uninstall", tint = AppColors.TextMuted, modifier = Modifier.size(18.dp))
+                    }
+                }
+            } else if (isInstalled) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Check, "Installed", tint = AppColors.Success, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(onClick = onUninstall, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Filled.Delete, "Uninstall", tint = AppColors.TextMuted, modifier = Modifier.size(18.dp))
+                    }
+                }
+            } else {
                 Button(
                     onClick = onInstall,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = AppColors.Warning,
-                        contentColor = Color(0xFF1A1200)
+                        containerColor = AppColors.SurfaceElevated,
+                        contentColor = AppColors.Primary
                     ),
                     shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                    modifier = Modifier.height(34.dp)
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    modifier = Modifier.height(32.dp)
                 ) {
-                    Icon(Icons.Filled.Update, null, modifier = Modifier.size(14.dp))
+                    Icon(AppIcons.Download, null, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Update", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Install", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
-                IconButton(onClick = onUninstall, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Filled.DeleteOutline, "Uninstall", tint = AppColors.Danger, modifier = Modifier.size(18.dp))
-                }
-            }
-        } else if (isInstalled) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(AppColors.Success.copy(alpha = 0.14f))
-                        .border(0.5.dp, AppColors.Success.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                ) {
-                    Icon(Icons.Filled.Check, "Installed", tint = AppColors.Success, modifier = Modifier.size(15.dp))
-                }
-                IconButton(onClick = onUninstall, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Filled.DeleteOutline, "Uninstall", tint = AppColors.Danger, modifier = Modifier.size(18.dp))
-                }
-            }
-        } else {
-            Button(
-                onClick = onInstall,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AppColors.Accent,
-                    contentColor = Color(0xFF071326)
-                ),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                modifier = Modifier.height(34.dp)
-            ) {
-                Icon(Icons.Filled.Download, null, modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Install", fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
+        HorizontalDivider(
+            modifier = Modifier.padding(start = 64.dp, end = 16.dp),
+            thickness = 0.5.dp,
+            color = AppColors.Divider
+        )
     }
 }
 
 @Composable
-private fun InstalledExtensionCard(
+private fun InstalledExtensionFlatRow(
     info: InstalledExtensionInfo,
     activeApiName: String?,
     onSelectApi: (String) -> Unit,
     onUninstall: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(AppColors.SurfaceCard)
-            .border(0.5.dp, AppColors.Border, RoundedCornerShape(14.dp))
-            .padding(14.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(AppColors.AccentDim),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Filled.Extension, null, tint = AppColors.Accent, modifier = Modifier.size(20.dp))
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(AppIcons.Extension, null, tint = AppColors.TextSecondary, modifier = Modifier.size(22.dp))
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = info.pluginData.internalName,
+                        color = AppColors.TextPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = buildString {
+                            if (info.pluginData.version > 0) append("v${info.pluginData.version} • ")
+                            append(if (info.pluginData.isOnline) "Installed .cs3" else "Local .cs3")
+                        },
+                        color = AppColors.TextMuted,
+                        fontSize = 12.sp
+                    )
+                }
+                IconButton(onClick = onUninstall, modifier = Modifier.size(34.dp)) {
+                    Icon(Icons.Filled.Delete, "Remove", tint = AppColors.Danger, modifier = Modifier.size(19.dp))
+                }
             }
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = info.pluginData.internalName,
-                    color = AppColors.TextPrimary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = buildString {
-                        if (info.pluginData.version > 0) append("v${info.pluginData.version} • ")
-                        append(if (info.pluginData.isOnline) "Online .cs3" else "Local .cs3")
-                    },
-                    color = AppColors.TextMuted,
-                    fontSize = 11.sp
-                )
-            }
-            OutlinedButton(
-                onClick = onUninstall,
-                border = BorderStroke(0.5.dp, AppColors.Danger.copy(alpha = 0.5f)),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                modifier = Modifier.height(32.dp)
-            ) {
-                Icon(Icons.Filled.DeleteOutline, null, tint = AppColors.Danger, modifier = Modifier.size(15.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Remove", color = AppColors.Danger, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            }
-        }
 
-        if (info.providedApis.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(10.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                info.providedApis.take(4).forEach { apiName ->
-                    val isActive = apiName == activeApiName
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (isActive) AppColors.Accent else AppColors.SurfaceElevated)
-                            .clickable { onSelectApi(apiName) }
-                            .padding(horizontal = 10.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (isActive) {
-                            Icon(
-                                imageVector = Icons.Filled.Check,
-                                contentDescription = null,
-                                tint = Color(0xFF071326),
-                                modifier = Modifier.size(13.dp)
+            if (info.providedApis.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.padding(start = 36.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    info.providedApis.take(4).forEach { apiName ->
+                        val isActive = apiName == activeApiName
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (isActive) AppColors.Primary else AppColors.SurfaceCard)
+                                .clickable { onSelectApi(apiName) }
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (isActive) {
+                                Icon(Icons.Filled.Check, null, tint = Color.Black, modifier = Modifier.size(13.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                            Text(
+                                text = apiName,
+                                color = if (isActive) Color.Black else AppColors.TextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
                         }
-                        Text(
-                            text = apiName,
-                            color = if (isActive) Color(0xFF071326) else AppColors.TextPrimary,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
                     }
                 }
             }
         }
+        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
     }
 }

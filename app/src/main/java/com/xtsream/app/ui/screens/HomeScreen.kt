@@ -1,9 +1,8 @@
 package com.xtsream.app.ui.screens
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -14,8 +13,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Refresh
@@ -31,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,13 +37,13 @@ import com.xtsream.app.data.HomeSection
 import com.xtsream.app.data.MediaCardItem
 import com.xtsream.app.data.WatchlistStore
 import com.xtsream.app.engine.ExtensionController
+import com.xtsream.app.ui.components.AppIcons
 import com.xtsream.app.ui.components.EmptyNoProvidersView
 import com.xtsream.app.ui.components.ErrorStateView
+import com.xtsream.app.ui.components.M3LoadingView
 import com.xtsream.app.ui.components.PosterCard
-import com.xtsream.app.ui.components.PosterCardSkeleton
 import com.xtsream.app.ui.components.ProviderPickerSheet
 import com.xtsream.app.ui.components.buildCoilRequest
-import com.xtsream.app.ui.components.shimmerEffect
 import com.xtsream.app.ui.theme.AppColors
 import com.xtsream.app.viewmodel.HomeViewModel
 import kotlinx.coroutines.delay
@@ -66,85 +64,16 @@ fun HomeScreen(
 
     var showProviderPicker by remember { mutableStateOf(false) }
 
-    Column(
+    val hasHero = !isBooting && loadedApis.isNotEmpty() && !state.isLoading && state.featuredItems.isNotEmpty()
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(AppColors.Background)
-            .statusBarsPadding()
     ) {
-        // Top Header Bar
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "MOVIEAPPP",
-                color = AppColors.TextPrimary,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Black,
-                letterSpacing = 1.2.sp
-            )
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            if (loadedApis.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(AppColors.SurfaceCard)
-                        .border(0.5.dp, AppColors.BorderStrong, RoundedCornerShape(10.dp))
-                        .clickable { showProviderPicker = true }
-                        .padding(horizontal = 12.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(AppColors.Success)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = activeApi?.name ?: "Select Provider",
-                        color = AppColors.TextPrimary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 150.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Icon(
-                        imageVector = Icons.Filled.KeyboardArrowDown,
-                        contentDescription = "Switch provider",
-                        tint = AppColors.TextSecondary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(6.dp))
-
-                IconButton(
-                    onClick = { homeViewModel.refresh() },
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Refresh,
-                        contentDescription = "Refresh",
-                        tint = AppColors.TextSecondary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
-        }
-
-        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Border)
-
         when {
             isBooting -> {
-                HomeSkeletonContent()
+                M3LoadingView()
             }
 
             loadedApis.isEmpty() -> {
@@ -152,7 +81,7 @@ fun HomeScreen(
             }
 
             state.isLoading && state.sections.isEmpty() -> {
-                HomeSkeletonContent()
+                M3LoadingView()
             }
 
             state.errorMessage != null && state.sections.isEmpty() -> {
@@ -170,17 +99,21 @@ fun HomeScreen(
                 ) {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 24.dp),
-                        verticalArrangement = Arrangement.spacedBy(22.dp)
+                        contentPadding = PaddingValues(bottom = 28.dp),
+                        verticalArrangement = Arrangement.spacedBy(24.dp)
                     ) {
                         if (state.featuredItems.isNotEmpty()) {
-                            item(key = "hero_carousel") {
-                                FeaturedHeroCarousel(
+                            item(key = "hero_banner") {
+                                FullBleedHeroSlider(
                                     items = state.featuredItems,
                                     watchlistUrls = watchlist.map { it.url }.toSet(),
                                     onDetailsClick = onMediaClick,
                                     onToggleBookmark = { WatchlistStore.toggleWatchlist(it) }
                                 )
+                            }
+                        } else {
+                            item(key = "top_spacer") {
+                                Spacer(modifier = Modifier.statusBarsPadding().height(56.dp))
                             }
                         }
 
@@ -192,6 +125,68 @@ fun HomeScreen(
                             )
                         }
                     }
+                }
+            }
+        }
+
+        // Clean overlay top bar (transparent over hero scrim, pitch black otherwise)
+        if (loadedApis.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        if (hasHero) {
+                            Brush.verticalGradient(
+                                listOf(Color.Black.copy(alpha = 0.72f), Color.Transparent)
+                            )
+                        } else {
+                            Brush.verticalGradient(listOf(AppColors.Background, AppColors.Background))
+                        }
+                    )
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Provider selector button directly on bar (clean, zero clutter)
+                Row(
+                    modifier = Modifier
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { showProviderPicker = true }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = activeApi?.name ?: "Select Provider",
+                        color = AppColors.Primary,
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 220.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        contentDescription = "Switch provider",
+                        tint = AppColors.TextSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                IconButton(
+                    onClick = { homeViewModel.refresh() },
+                    modifier = Modifier.size(38.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = "Refresh",
+                        tint = AppColors.Primary,
+                        modifier = Modifier.size(21.dp)
+                    )
                 }
             }
         }
@@ -208,8 +203,11 @@ fun HomeScreen(
     }
 }
 
+/**
+ * Full-bleed edge-to-edge cinematic Hero Slider (Prime Video / CloudStream / Netflix style).
+ */
 @Composable
-private fun FeaturedHeroCarousel(
+private fun FullBleedHeroSlider(
     items: List<MediaCardItem>,
     watchlistUrls: Set<String>,
     onDetailsClick: (MediaCardItem) -> Unit,
@@ -221,7 +219,7 @@ private fun FeaturedHeroCarousel(
     LaunchedEffect(items.size) {
         if (items.size > 1) {
             while (true) {
-                delay(5500)
+                delay(6000)
                 if (!pagerState.isScrollInProgress) {
                     val next = (pagerState.currentPage + 1) % items.size
                     pagerState.animateScrollToPage(next)
@@ -230,142 +228,148 @@ private fun FeaturedHeroCarousel(
         }
     }
 
-    Column(modifier = Modifier.fillMaxWidth().padding(top = 14.dp)) {
-        HorizontalPager(
-            state = pagerState,
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            pageSpacing = 12.dp,
-            modifier = Modifier.fillMaxWidth()
-        ) { page ->
-            val item = items[page]
-            val isSaved = item.url in watchlistUrls
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(455.dp)
+        ) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize()
+            ) { page ->
+                val item = items[page]
+                val isSaved = item.url in watchlistUrls
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(230.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(AppColors.SurfaceCard)
-                    .border(0.5.dp, AppColors.BorderStrong, RoundedCornerShape(16.dp))
-                    .clickable { onDetailsClick(item) }
-            ) {
-                if (!item.posterUrl.isNullOrBlank()) {
-                    AsyncImage(
-                        model = buildCoilRequest(context, item.posterUrl, item.posterHeaders),
-                        contentDescription = item.title,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-
-                // Cinematic gradient overlay
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                colorStops = arrayOf(
-                                    0.0f to Color.Black.copy(alpha = 0.15f),
-                                    0.45f to Color.Black.copy(alpha = 0.35f),
-                                    0.85f to Color(0xE60B0C10),
-                                    1.0f to Color(0xFF0B0C10)
-                                )
-                            )
-                        )
-                )
-
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .fillMaxWidth()
-                        .padding(16.dp)
+                        .background(AppColors.Surface)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onDetailsClick(item) }
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        if (item.type.isNotBlank()) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(AppColors.AccentDim)
-                                    .border(0.5.dp, AppColors.Accent.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-                                    .padding(horizontal = 8.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = item.type.uppercase(),
-                                    color = AppColors.Accent,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                        if (!item.score.isNullOrBlank()) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Star, null, tint = AppColors.Gold, modifier = Modifier.size(13.dp))
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Text(item.score, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                        if (!item.quality.isNullOrBlank()) {
-                            Text(
-                                text = item.quality,
-                                color = AppColors.TextSecondary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
+                    if (!item.posterUrl.isNullOrBlank()) {
+                        AsyncImage(
+                            model = buildCoilRequest(context, item.posterUrl, item.posterHeaders),
+                            contentDescription = item.title,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
 
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Text(
-                        text = item.title,
-                        color = Color.White,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
+                    // Seamless cinema fade into OLED black
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    colorStops = arrayOf(
+                                        0.0f to Color.Black.copy(alpha = 0.55f),
+                                        0.28f to Color.Transparent,
+                                        0.58f to Color.Black.copy(alpha = 0.45f),
+                                        0.86f to Color(0xEB000000),
+                                        1.0f to AppColors.Background
+                                    )
+                                )
+                            )
                     )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = item.title,
+                            color = AppColors.Primary,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            lineHeight = 29.sp,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(
-                            onClick = { onDetailsClick(item) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.White,
-                                contentColor = Color(0xFF0B0C10)
-                            ),
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                            modifier = Modifier.height(38.dp)
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Clean dot-separated metadata line (no cluttered pill spam)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Filled.Info, null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Details", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            if (!item.score.isNullOrBlank()) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Filled.Star, null, tint = AppColors.Gold, modifier = Modifier.size(13.dp))
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(item.score, color = AppColors.Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            val metaParts = buildList {
+                                item.type.takeIf { it.isNotBlank() }?.let { add(it) }
+                                item.year?.takeIf { it > 0 }?.let { add(it.toString()) }
+                                item.quality?.takeIf { it.isNotBlank() }?.let { add(it) }
+                                if (item.hasSub && item.hasDub) add("Sub & Dub")
+                                else if (item.hasSub) add("Sub")
+                                else if (item.hasDub) add("Dub")
+                            }
+                            if (metaParts.isNotEmpty()) {
+                                Text(
+                                    text = metaParts.joinToString("  •  "),
+                                    color = AppColors.TextSecondary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
                         }
 
-                        OutlinedButton(
-                            onClick = { onToggleBookmark(item) },
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                            modifier = Modifier.height(38.dp)
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = if (isSaved) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
-                                contentDescription = null,
-                                tint = if (isSaved) AppColors.Accent else Color.White,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = if (isSaved) "Saved" else "Watchlist",
-                                color = Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            Button(
+                                onClick = { onDetailsClick(item) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AppColors.Primary,
+                                    contentColor = Color.Black
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 0.dp),
+                                modifier = Modifier.height(42.dp)
+                            ) {
+                                Icon(Icons.Filled.Info, null, modifier = Modifier.size(17.dp))
+                                Spacer(modifier = Modifier.width(7.dp))
+                                Text("Details", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            }
+
+                            Button(
+                                onClick = { onToggleBookmark(item) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AppColors.SurfaceElevated,
+                                    contentColor = AppColors.Primary
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 0.dp),
+                                modifier = Modifier.height(42.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isSaved) AppIcons.Bookmark else AppIcons.BookmarkBorder,
+                                    contentDescription = null,
+                                    tint = if (isSaved) AppColors.Primary else AppColors.TextSecondary,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (isSaved) "Saved" else "My List",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 14.sp
+                                )
+                            }
                         }
                     }
                 }
@@ -373,7 +377,7 @@ private fun FeaturedHeroCarousel(
         }
 
         if (items.size > 1) {
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,
@@ -384,10 +388,10 @@ private fun FeaturedHeroCarousel(
                     Box(
                         modifier = Modifier
                             .padding(horizontal = 3.dp)
-                            .height(5.dp)
-                            .width(if (selected) 18.dp else 5.dp)
+                            .height(3.dp)
+                            .width(if (selected) 20.dp else 6.dp)
                             .clip(CircleShape)
-                            .background(if (selected) AppColors.Accent else AppColors.TextMuted.copy(alpha = 0.45f))
+                            .background(if (selected) AppColors.Primary else AppColors.BorderStrong)
                     )
                 }
             }
@@ -405,9 +409,11 @@ private fun HomeSectionRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .clickable(enabled = section.mainPageData != null && section.items.size >= 4) {
+                    onSeeAllClick()
+                }
                 .padding(horizontal = 16.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = section.title,
@@ -419,35 +425,21 @@ private fun HomeSectionRow(
                 modifier = Modifier.weight(1f)
             )
             if (section.mainPageData != null && section.items.size >= 4) {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onSeeAllClick() }
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "See all",
-                        color = AppColors.Accent,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = AppColors.Accent,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = "See all",
+                    tint = AppColors.TextSecondary,
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        val cardWidth = if (section.isHorizontal) 186.dp else 116.dp
+        val cardWidth = if (section.isHorizontal) 196.dp else 118.dp
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             items(section.items, key = { "${section.id}_${it.url}" }) { item ->
                 PosterCard(
@@ -456,47 +448,6 @@ private fun HomeSectionRow(
                     modifier = Modifier.width(cardWidth),
                     onClick = { onMediaClick(item) }
                 )
-            }
-        }
-    }
-}
-
-@Composable
-private fun HomeSkeletonContent() {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(22.dp)
-    ) {
-        item {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .height(230.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .shimmerEffect()
-            )
-        }
-        items(3) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp)
-                        .width(140.dp)
-                        .height(16.dp)
-                        .clip(RoundedCornerShape(5.dp))
-                        .shimmerEffect()
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    repeat(3) {
-                        PosterCardSkeleton(modifier = Modifier.width(116.dp))
-                    }
-                }
             }
         }
     }

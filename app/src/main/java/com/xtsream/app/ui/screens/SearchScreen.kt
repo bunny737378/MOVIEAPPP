@@ -1,7 +1,6 @@
 package com.xtsream.app.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,10 +18,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,8 +37,11 @@ import androidx.compose.ui.unit.sp
 import com.xtsream.app.data.MediaCardItem
 import com.xtsream.app.data.WatchlistStore
 import com.xtsream.app.engine.ExtensionController
+import com.xtsream.app.ui.components.AppIcons
 import com.xtsream.app.ui.components.EmptyNoProvidersView
 import com.xtsream.app.ui.components.ErrorStateView
+import com.xtsream.app.ui.components.M3InlineSpinner
+import com.xtsream.app.ui.components.M3LoadingView
 import com.xtsream.app.ui.components.MediaListRowCard
 import com.xtsream.app.ui.components.PosterCard
 import com.xtsream.app.ui.theme.AppColors
@@ -67,7 +66,7 @@ fun SearchScreen(
             .background(AppColors.Background)
             .statusBarsPadding()
     ) {
-        // Search Input Bar
+        // Search Input Bar (clean flat YouTube/CloudStream style)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -77,10 +76,9 @@ fun SearchScreen(
             Row(
                 modifier = Modifier
                     .weight(1f)
-                    .height(46.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(AppColors.SurfaceCard)
-                    .border(0.5.dp, AppColors.BorderStrong, RoundedCornerShape(12.dp))
                     .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -96,7 +94,7 @@ fun SearchScreen(
                     onValueChange = { searchViewModel.onQueryChange(it) },
                     singleLine = true,
                     textStyle = TextStyle(color = AppColors.TextPrimary, fontSize = 15.sp),
-                    cursorBrush = SolidColor(AppColors.Accent),
+                    cursorBrush = SolidColor(AppColors.Primary),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(
                         onSearch = {
@@ -121,31 +119,22 @@ fun SearchScreen(
                         onClick = { searchViewModel.clearQuery() },
                         modifier = Modifier.size(28.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Filled.Close,
-                            contentDescription = "Clear",
-                            tint = AppColors.TextSecondary,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Icon(Icons.Filled.Close, "Clear", tint = AppColors.TextSecondary, modifier = Modifier.size(18.dp))
                     }
                 }
             }
 
             if (state.selectedProviderFilter != null && state.hasSearched) {
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 IconButton(
                     onClick = { searchViewModel.toggleLayoutMode() },
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(AppColors.SurfaceCard)
-                        .border(0.5.dp, AppColors.Border, RoundedCornerShape(12.dp))
+                    modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
-                        imageVector = if (state.isGridView) Icons.AutoMirrored.Filled.ViewList else Icons.Filled.GridView,
+                        imageVector = if (state.isGridView) AppIcons.ViewList else AppIcons.GridView,
                         contentDescription = "Toggle layout",
-                        tint = AppColors.TextPrimary,
-                        modifier = Modifier.size(20.dp)
+                        tint = AppColors.Primary,
+                        modifier = Modifier.size(21.dp)
                     )
                 }
             }
@@ -156,7 +145,7 @@ fun SearchScreen(
             return
         }
 
-        // Provider scope filter chips (All Providers vs individual installed extensions)
+        // Clean Provider Filter Row
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -164,89 +153,50 @@ fun SearchScreen(
         ) {
             item(key = "filter_all") {
                 val selected = state.selectedProviderFilter == null
-                FilterChip(
+                SearchScopeChip(
+                    label = "All (${loadedApis.size})",
                     selected = selected,
-                    onClick = { searchViewModel.selectProviderFilter(null) },
-                    label = { Text("All (${loadedApis.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = AppColors.Accent,
-                        selectedLabelColor = Color(0xFF071326),
-                        containerColor = AppColors.SurfaceCard,
-                        labelColor = AppColors.TextSecondary
-                    ),
-                    border = FilterChipDefaults.filterChipBorder(
-                        enabled = true,
-                        selected = selected,
-                        borderColor = AppColors.Border,
-                        selectedBorderColor = AppColors.Accent
-                    )
+                    onClick = { searchViewModel.selectProviderFilter(null) }
                 )
             }
-
             items(loadedApis, key = { it.name }) { api ->
-                val selected = state.selectedProviderFilter == api.name
-                FilterChip(
-                    selected = selected,
-                    onClick = { searchViewModel.selectProviderFilter(api.name) },
-                    label = { Text(api.name, fontSize = 12.sp, fontWeight = FontWeight.Medium) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = AppColors.Accent,
-                        selectedLabelColor = Color(0xFF071326),
-                        containerColor = AppColors.SurfaceCard,
-                        labelColor = AppColors.TextSecondary
-                    ),
-                    border = FilterChipDefaults.filterChipBorder(
-                        enabled = true,
-                        selected = selected,
-                        borderColor = AppColors.Border,
-                        selectedBorderColor = AppColors.Accent
-                    )
+                SearchScopeChip(
+                    label = api.name,
+                    selected = state.selectedProviderFilter == api.name,
+                    onClick = { searchViewModel.selectProviderFilter(api.name) }
                 )
             }
         }
 
-        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Border)
+        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
 
-        // Content Area
         when {
             !state.hasSearched -> {
                 if (state.quickSuggestions.isNotEmpty()) {
-                    LazyColumn(
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        item {
-                            Text(
-                                text = "Quick Suggestions",
-                                color = AppColors.TextSecondary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
+                    LazyColumn(contentPadding = PaddingValues(vertical = 6.dp)) {
                         items(state.quickSuggestions, key = { it.url }) { suggestion ->
                             MediaListRowCard(item = suggestion, onClick = { onMediaClick(suggestion) })
                         }
                     }
                 } else if (recentSearches.isNotEmpty()) {
-                    LazyColumn(
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
+                    LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
                         item {
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "Recent Searches",
-                                    color = AppColors.TextSecondary,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold
+                                    text = "Recent",
+                                    color = AppColors.TextMuted,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "Clear all",
-                                    color = AppColors.Accent,
+                                    text = "Clear",
+                                    color = AppColors.TextSecondary,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium,
                                     modifier = Modifier.clickable { WatchlistStore.clearRecentSearches() }
@@ -257,20 +207,19 @@ fun SearchScreen(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
                                     .clickable {
                                         focusManager.clearFocus()
                                         searchViewModel.executeSearch(recent)
                                     }
-                                    .padding(vertical = 10.dp, horizontal = 6.dp),
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Filled.History, null, tint = AppColors.TextMuted, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(12.dp))
+                                Icon(AppIcons.History, null, tint = AppColors.TextMuted, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(14.dp))
                                 Text(
                                     text = recent,
                                     color = AppColors.TextPrimary,
-                                    fontSize = 14.sp,
+                                    fontSize = 15.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f)
@@ -287,7 +236,7 @@ fun SearchScreen(
                 } else {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Filled.Search, null, tint = AppColors.TextMuted, modifier = Modifier.size(44.dp))
+                            Icon(Icons.Filled.Search, null, tint = AppColors.TextMuted, modifier = Modifier.size(42.dp))
                             Spacer(modifier = Modifier.height(10.dp))
                             Text(
                                 text = "Search across ${loadedApis.size} installed provider(s)",
@@ -300,13 +249,7 @@ fun SearchScreen(
             }
 
             state.isSearching && state.globalGroups.isEmpty() && state.singleProviderItems.isEmpty() -> {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = AppColors.Accent, strokeWidth = 2.5.dp)
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text("Searching extensions...", color = AppColors.TextSecondary, fontSize = 13.sp)
-                    }
-                }
+                M3LoadingView()
             }
 
             state.errorMessage != null && state.globalGroups.isEmpty() && state.singleProviderItems.isEmpty() -> {
@@ -317,11 +260,10 @@ fun SearchScreen(
             }
 
             state.selectedProviderFilter == null -> {
-                // Global Search grouped by provider
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                    contentPadding = PaddingValues(vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(22.dp)
                 ) {
                     if (state.isSearching) {
                         item(key = "searching_banner") {
@@ -329,13 +271,9 @@ fun SearchScreen(
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                CircularProgressIndicator(
-                                    color = AppColors.Accent,
-                                    strokeWidth = 2.dp,
-                                    modifier = Modifier.size(14.dp)
-                                )
+                                M3InlineSpinner(size = 14.dp)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Querying remaining providers...", color = AppColors.TextSecondary, fontSize = 12.sp)
+                                Text("Searching more providers...", color = AppColors.TextSecondary, fontSize = 12.sp)
                             }
                         }
                     }
@@ -345,36 +283,39 @@ fun SearchScreen(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .clickable { onSeeAllGroup(group, state.query) }
                                     .padding(horizontal = 16.dp, vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "${group.apiName} (${group.items.size})",
+                                    text = group.apiName,
                                     color = AppColors.TextPrimary,
                                     fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f)
                                 )
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable { onSeeAllGroup(group, state.query) }
-                                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("See all", color = AppColors.Accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = AppColors.Accent, modifier = Modifier.size(16.dp))
-                                }
+                                Text(
+                                    text = "${group.items.size}",
+                                    color = AppColors.TextMuted,
+                                    fontSize = 12.sp
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    null,
+                                    tint = AppColors.TextSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
                             LazyRow(
                                 contentPadding = PaddingValues(horizontal = 16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 items(group.items, key = { "${group.apiName}_${it.url}" }) { item ->
                                     PosterCard(
                                         item = item,
-                                        modifier = Modifier.width(114.dp),
+                                        modifier = Modifier.width(116.dp),
                                         onClick = { onMediaClick(item) }
                                     )
                                 }
@@ -385,7 +326,6 @@ fun SearchScreen(
             }
 
             else -> {
-                // Single-provider Search with BOTH Grid & List pagination
                 if (state.isGridView) {
                     val gridState = rememberLazyGridState()
                     val shouldLoadMore by remember {
@@ -412,7 +352,7 @@ fun SearchScreen(
                         if (state.isLoadingMore) {
                             item(span = { GridItemSpan(3) }) {
                                 Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                                    CircularProgressIndicator(color = AppColors.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                                    M3InlineSpinner(size = 24.dp)
                                 }
                             }
                         }
@@ -431,8 +371,7 @@ fun SearchScreen(
 
                     LazyColumn(
                         state = listState,
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(vertical = 8.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
                         items(state.singleProviderItems, key = { it.url }) { item ->
@@ -441,7 +380,7 @@ fun SearchScreen(
                         if (state.isLoadingMore) {
                             item {
                                 Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                                    CircularProgressIndicator(color = AppColors.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                                    M3InlineSpinner(size = 24.dp)
                                 }
                             }
                         }
@@ -449,5 +388,27 @@ fun SearchScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SearchScopeChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) AppColors.Primary else AppColors.SurfaceCard)
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 7.dp)
+    ) {
+        Text(
+            text = label,
+            color = if (selected) Color.Black else AppColors.TextSecondary,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+        )
     }
 }

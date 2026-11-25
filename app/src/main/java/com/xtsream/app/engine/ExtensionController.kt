@@ -1,12 +1,14 @@
 package com.xtsream.app.engine
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import com.lagradost.cloudstream3.APIHolder
 import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.network.initClient
+import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.PLUGIN_VERSION_NOT_SET
 import com.lagradost.cloudstream3.plugins.PluginData
 import com.lagradost.cloudstream3.plugins.PluginManager
@@ -14,7 +16,9 @@ import com.lagradost.cloudstream3.plugins.Repository
 import com.lagradost.cloudstream3.plugins.RepositoryManager
 import com.lagradost.cloudstream3.plugins.SitePlugin
 import com.lagradost.cloudstream3.ui.settings.extensions.RepositoryData
+import com.lagradost.cloudstream3.utils.AppUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,12 +29,21 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
+import java.util.zip.ZipFile
 
-data class RepoFetchResult(
-    val repository: RepositoryData,
-    val plugins: List<SitePlugin>,
-    val addedChildRepos: Int = 0
-)
+sealed class AddSourceResult {
+    data class RepositoryAdded(
+        val repository: RepositoryData,
+        val plugins: List<SitePlugin>,
+        val addedChildRepos: Int = 0
+    ) : AddSourceResult()
+
+    data class DirectPluginInstalled(
+        val pluginName: String,
+        val addedApis: List<String>,
+        val addedRepos: Int
+    ) : AddSourceResult()
+}
 
 data class InstalledExtensionInfo(
     val pluginData: PluginData,
@@ -40,6 +53,7 @@ data class InstalledExtensionInfo(
 object ExtensionController {
     private const val TAG = "ExtensionController"
     private const val PREF_ACTIVE_API = "active_provider_api_name"
+    private const val DIRECT_REPO_KEY = "direct_cs3_extensions"
 
     private val initMutex = Mutex()
     @Volatile
@@ -75,6 +89,9 @@ object ExtensionController {
             return@withLock
         }
         _isBooting.value = true
+        RepositoryManager.onRepositoriesChanged = {
+            refreshRuntimeState()
+        }
         withContext(Dispatchers.IO) {
             try {
                 app.initClient(context.applicationContext)
@@ -147,85 +164,244 @@ object ExtensionController {
     }
 
     /**
-     * Resolves a CloudStream repository shortname (e.g. "megarepo", "hexated", "phisherrepo", "!code")
-     * or direct URL / cloudstreamrepo:// link, supports both standard plugin repos and multi-repo lists.
+     * Universal CloudStream source resolver supporting ALL formats:
+     * 1. Repo shortnames ("megarepo", "hexated", "phisherrepo", "!code")
+     * 2. Standard repo.json (pluginLists + optional includedRepositories + nested repos)
+     * 3. Direct plugins.json (JSON array of SitePlugin)
+     * 4. Direct .cs3 extension URL (including GitHub blob URLs & redirected .cs3 links!)
      */
-    suspend fun addRepositoryFromInput(rawInput: String): Result<RepoFetchResult> = withContext(Dispatchers.IO) {
-        val trimmed = rawInput.trim()
-        if (trimmed.isBlank()) {
-            return@withContext Result.failure(IllegalArgumentException("Enter a repository shortname or URL"))
+    suspend fun addSourceFromInput(context: Context, rawInput: String): Result<AddSourceResult> =
+        withContext(Dispatchers.IO) {
+            val trimmed = rawInput.trim()
+            if (trimmed.isBlank()) {
+                return@withContext Result.failure(IllegalArgumentException("Enter a repo shortname, repo URL, or .cs3 link"))
+            }
+
+            // Convert GitHub web blob URLs to raw URLs automatically so pasting from browser works!
+            val normalizedInput = normalizeGithubBlobUrl(trimmed)
+
+            val resolvedUrl = RepositoryManager.parseRepoUrl(normalizedInput)
+                ?: return@withContext Result.failure(
+                    IllegalArgumentException("Could not resolve \"$trimmed\". Check the shortname or URL.")
+                )
+
+            val finalUrl = normalizeGithubBlobUrl(resolvedUrl)
+
+            // Fast path: direct .cs3 link by URL path
+            if (looksLikeCs3Url(finalUrl)) {
+                return@withContext installDirectCs3Url(context, finalUrl)
+            }
+
+            // Otherwise inspect response (could be repo.json, plugins.json array, or redirected .cs3 zip!)
+            fetchAndRegisterSource(context, finalUrl)
         }
 
-        val resolvedUrl = RepositoryManager.parseRepoUrl(trimmed)
-            ?: return@withContext Result.failure(
-                IllegalArgumentException("Could not resolve \"$trimmed\". Check the shortname or URL.")
-            )
-
-        val result = fetchAndRegisterRepository(resolvedUrl)
-        refreshRuntimeState()
-        result
+    private fun normalizeGithubBlobUrl(url: String): String {
+        val ghBlob = Regex("^https?://github\\.com/([^/]+)/([^/]+)/blob/(.+)$")
+        val match = ghBlob.matchEntire(url) ?: return url
+        val (user, repo, path) = match.destructured
+        return "https://raw.githubusercontent.com/$user/$repo/$path"
     }
 
-    private suspend fun fetchAndRegisterRepository(repoUrl: String): Result<RepoFetchResult> = withContext(Dispatchers.IO) {
-        _loadingRepos.update { it + repoUrl }
-        try {
-            val rawResponse = app.get(
-                url = RepositoryManager.convertRawGitUrl(repoUrl),
-                cacheTime = 5,
-                cacheUnit = TimeUnit.MINUTES
-            ).text
+    private fun looksLikeCs3Url(url: String): Boolean {
+        val cleanPath = runCatching { Uri.parse(url).path }.getOrNull() ?: url.substringBefore('?')
+        return cleanPath.endsWith(".cs3", ignoreCase = true) || cleanPath.endsWith(".zip", ignoreCase = true)
+    }
 
-            val parsedRepo = runCatching {
-                com.lagradost.cloudstream3.utils.AppUtils.parseJson<Repository>(rawResponse)
-            }.getOrNull() ?: return@withContext Result.failure(
-                IllegalStateException("Invalid CloudStream repository manifest at $repoUrl")
-            )
+    private suspend fun installDirectCs3Url(context: Context, cs3Url: String): Result<AddSourceResult> =
+        withContext(Dispatchers.IO) {
+            try {
+                val reposBefore = RepositoryManager.getRepositories().map { it.url }.toSet()
+                val apisBefore = _loadedApis.value.map { it.name }.toSet()
 
-            val repoData = RepositoryData(
-                iconUrl = parsedRepo.iconUrl,
-                name = parsedRepo.name.ifBlank { repoUrl.substringAfterLast('/') },
-                url = repoUrl,
-                description = parsedRepo.description
-            )
-            RepositoryManager.addRepository(repoData)
+                val rawName = runCatching { Uri.parse(cs3Url).lastPathSegment }.getOrNull()
+                    ?.substringBefore('?')
+                    ?.removeSuffix(".cs3")
+                    ?.removeSuffix(".zip")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: "Extension_${cs3Url.hashCode()}"
 
-            // Support optional includedRepositories array in meta-repositories
-            var addedChildren = 0
-            runCatching {
-                val jsonObj = JSONObject(rawResponse)
-                val included = jsonObj.optJSONArray("includedRepositories")
-                if (included != null) {
-                    for (i in 0 until included.length()) {
-                        val childUrl = included.optString(i, "").trim()
-                        if (childUrl.isNotBlank()) {
-                            val resolvedChild = RepositoryManager.parseRepoUrl(childUrl) ?: childUrl
-                            val childRepo = RepositoryManager.parseRepository(resolvedChild)
-                            if (childRepo != null) {
-                                RepositoryManager.addRepository(
-                                    RepositoryData(
-                                        iconUrl = childRepo.iconUrl,
-                                        name = childRepo.name,
-                                        url = resolvedChild,
-                                        description = childRepo.description
+                val targetFile = PluginManager.getPluginPath(context.applicationContext, rawName, DIRECT_REPO_KEY)
+                PluginManager.unloadPlugin(targetFile.absolutePath)
+
+                val downloaded = RepositoryManager.downloadPluginToFile(
+                    context = context.applicationContext,
+                    pluginUrl = cs3Url,
+                    file = targetFile,
+                    expectedFileHash = null
+                ) ?: return@withContext Result.failure(IllegalStateException("Failed to download .cs3 from $cs3Url"))
+
+                // Verify it's actually a valid .cs3 zip archive with manifest.json
+                val manifest = readCs3Manifest(downloaded)
+                    ?: run {
+                        downloaded.delete()
+                        return@withContext Result.failure(
+                            IllegalStateException("File is not a valid CloudStream .cs3 extension (missing manifest.json)")
+                        )
+                    }
+
+                val pluginName = manifest.name?.takeIf { it.isNotBlank() } ?: rawName
+                val pluginVersion = manifest.version ?: PLUGIN_VERSION_NOT_SET
+
+                val loaded = PluginManager.loadPlugin(
+                    context = context.applicationContext,
+                    file = downloaded,
+                    data = PluginData(
+                        internalName = pluginName,
+                        url = cs3Url,
+                        isOnline = true,
+                        filePath = downloaded.absolutePath,
+                        version = pluginVersion
+                    )
+                )
+
+                if (!loaded) {
+                    return@withContext Result.failure(IllegalStateException("Downloaded \"$pluginName\" but failed to load .cs3"))
+                }
+
+                // Allow async meta-repo plugins (like MegaProvider) a moment to register repos
+                delay(350)
+                refreshRuntimeState()
+
+                val reposAfter = RepositoryManager.getRepositories().map { it.url }.toSet()
+                val newlyAddedRepos = (reposAfter - reposBefore).size
+                val newlyAddedApis = _loadedApis.value.filter { it.name !in apisBefore }
+
+                if (_activeApi.value == null && newlyAddedApis.isNotEmpty()) {
+                    selectProvider(newlyAddedApis.first())
+                } else if (newlyAddedApis.isNotEmpty() && _loadedApis.value.size == newlyAddedApis.size) {
+                    selectProvider(newlyAddedApis.first())
+                }
+
+                Result.success(
+                    AddSourceResult.DirectPluginInstalled(
+                        pluginName = pluginName,
+                        addedApis = newlyAddedApis.map { it.name },
+                        addedRepos = newlyAddedRepos
+                    )
+                )
+            } catch (t: Throwable) {
+                Log.e(TAG, "Direct .cs3 install failed for $cs3Url", t)
+                Result.failure(t)
+            }
+        }
+
+    private fun readCs3Manifest(file: File): BasePlugin.Manifest? {
+        return runCatching {
+            ZipFile(file).use { zip ->
+                val entry = zip.getEntry("manifest.json") ?: return@use null
+                zip.getInputStream(entry).bufferedReader().use { reader ->
+                    AppUtils.parseJson<BasePlugin.Manifest>(reader.readText())
+                }
+            }
+        }.getOrNull()
+    }
+
+    private suspend fun fetchAndRegisterSource(context: Context, repoUrl: String): Result<AddSourceResult> =
+        withContext(Dispatchers.IO) {
+            _loadingRepos.update { it + repoUrl }
+            try {
+                val fetchUrl = RepositoryManager.convertRawGitUrl(repoUrl)
+                val response = app.get(
+                    url = fetchUrl,
+                    cacheTime = 5,
+                    cacheUnit = TimeUnit.MINUTES
+                )
+
+                val finalResolvedUrl = response.okhttpResponse.request.url.toString()
+                val contentType = response.headers["Content-Type"].orEmpty()
+
+                // If the shortname/redirect actually resolved to a binary .cs3 zip file!
+                val bytes = response.okhttpResponse.body.bytes()
+                val isZipMagic = bytes.size >= 4 &&
+                    bytes[0] == 0x50.toByte() &&
+                    bytes[1] == 0x4B.toByte() &&
+                    bytes[2] == 0x03.toByte() &&
+                    bytes[3] == 0x04.toByte()
+
+                if (isZipMagic || looksLikeCs3Url(finalResolvedUrl) || contentType.contains("zip", ignoreCase = true)) {
+                    _loadingRepos.update { it - repoUrl }
+                    return@withContext installDirectCs3Url(context, finalResolvedUrl)
+                }
+
+                val rawText = bytes.toString(Charsets.UTF_8).trim()
+
+                // Case A: Direct plugins.json (JSON Array of SitePlugin)
+                if (rawText.startsWith("[")) {
+                    val directPlugins = runCatching {
+                        AppUtils.parseJson<Array<SitePlugin>>(rawText).toList()
+                    }.getOrNull() ?: return@withContext Result.failure(
+                        IllegalStateException("Invalid plugins list JSON at $repoUrl")
+                    )
+
+                    val hostName = runCatching { Uri.parse(repoUrl).host }.getOrNull()
+                        ?.removePrefix("raw.")
+                        ?: "Plugins List"
+                    val repoData = RepositoryData(
+                        iconUrl = directPlugins.firstOrNull { !it.iconUrl.isNullOrBlank() }?.iconUrl,
+                        name = hostName,
+                        url = repoUrl,
+                        description = "Direct plugins list (${directPlugins.size} extensions)"
+                    )
+                    RepositoryManager.addRepository(repoData)
+                    val unique = directPlugins.distinctBy { "${it.internalName}_${it.url}" }
+                    _repoPlugins.update { it + (repoUrl to unique) }
+                    refreshRuntimeState()
+                    return@withContext Result.success(AddSourceResult.RepositoryAdded(repoData, unique, 0))
+                }
+
+                // Case B: Standard CloudStream repo.json (JSON Object)
+                val parsedRepo = runCatching {
+                    AppUtils.parseJson<Repository>(rawText)
+                }.getOrNull() ?: return@withContext Result.failure(
+                    IllegalStateException("Unsupported link format. Provide a CloudStream repo shortname, repo.json, plugins.json, or .cs3 URL.")
+                )
+
+                val repoData = RepositoryData(
+                    iconUrl = parsedRepo.iconUrl,
+                    name = parsedRepo.name.ifBlank { repoUrl.substringAfterLast('/') },
+                    url = repoUrl,
+                    description = parsedRepo.description
+                )
+                RepositoryManager.addRepository(repoData)
+
+                var addedChildren = 0
+                runCatching {
+                    val jsonObj = JSONObject(rawText)
+                    val included = jsonObj.optJSONArray("includedRepositories")
+                    if (included != null) {
+                        for (i in 0 until included.length()) {
+                            val childUrl = included.optString(i, "").trim()
+                            if (childUrl.isNotBlank()) {
+                                val resolvedChild = RepositoryManager.parseRepoUrl(childUrl) ?: childUrl
+                                val childRepo = RepositoryManager.parseRepository(resolvedChild)
+                                if (childRepo != null) {
+                                    RepositoryManager.addRepository(
+                                        RepositoryData(
+                                            iconUrl = childRepo.iconUrl,
+                                            name = childRepo.name,
+                                            url = resolvedChild,
+                                            description = childRepo.description
+                                        )
                                     )
-                                )
-                                addedChildren++
+                                    addedChildren++
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            val plugins = fetchPluginsForRepo(repoData, parsedRepo)
-            _repoPlugins.update { it + (repoUrl to plugins) }
-            Result.success(RepoFetchResult(repoData, plugins, addedChildren))
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed adding repository $repoUrl", t)
-            Result.failure(t)
-        } finally {
-            _loadingRepos.update { it - repoUrl }
+                val plugins = fetchPluginsForRepo(repoData, parsedRepo)
+                _repoPlugins.update { it + (repoUrl to plugins) }
+                refreshRuntimeState()
+                Result.success(AddSourceResult.RepositoryAdded(repoData, plugins, addedChildren))
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed adding source $repoUrl", t)
+                Result.failure(t)
+            } finally {
+                _loadingRepos.update { it - repoUrl }
+            }
         }
-    }
 
     suspend fun loadRepositoryPlugins(repoData: RepositoryData, force: Boolean = false): Result<List<SitePlugin>> =
         withContext(Dispatchers.IO) {
@@ -234,8 +410,23 @@ object ExtensionController {
             }
             _loadingRepos.update { it + repoData.url }
             try {
-                val parsedRepo = RepositoryManager.parseRepository(repoData.url)
+                val rawText = app.get(
+                    url = RepositoryManager.convertRawGitUrl(repoData.url),
+                    cacheTime = if (force) 0 else 5,
+                    cacheUnit = TimeUnit.MINUTES
+                ).text.trim()
+
+                if (rawText.startsWith("[")) {
+                    val plugins = AppUtils.parseJson<Array<SitePlugin>>(rawText)
+                        .distinctBy { "${it.internalName}_${it.url}" }
+                    _repoPlugins.update { it + (repoData.url to plugins) }
+                    refreshRuntimeState()
+                    return@withContext Result.success(plugins)
+                }
+
+                val parsedRepo = runCatching { AppUtils.parseJson<Repository>(rawText) }.getOrNull()
                     ?: return@withContext Result.failure(IllegalStateException("Unable to load repository ${repoData.name}"))
+
                 val updatedMeta = repoData.copy(
                     iconUrl = parsedRepo.iconUrl ?: repoData.iconUrl,
                     name = parsedRepo.name.ifBlank { repoData.name },
@@ -265,14 +456,11 @@ object ExtensionController {
                     cacheUnit = TimeUnit.MINUTES
                 ).text.trim()
 
-                // Handle nested repository references inside pluginLists as well as standard SitePlugin arrays
                 if (respText.startsWith("[")) {
-                    val parsed = com.lagradost.cloudstream3.utils.AppUtils.parseJson<Array<SitePlugin>>(respText)
+                    val parsed = AppUtils.parseJson<Array<SitePlugin>>(respText)
                     list.addAll(parsed)
                 } else if (respText.startsWith("{")) {
-                    val nestedRepo = runCatching {
-                        com.lagradost.cloudstream3.utils.AppUtils.parseJson<Repository>(respText)
-                    }.getOrNull()
+                    val nestedRepo = runCatching { AppUtils.parseJson<Repository>(respText) }.getOrNull()
                     if (nestedRepo != null && nestedRepo.pluginLists.isNotEmpty()) {
                         RepositoryManager.addRepository(
                             RepositoryData(
@@ -338,13 +526,14 @@ object ExtensionController {
                 return@withContext Result.failure(IllegalStateException("Failed to load ${plugin.name} (.cs3)"))
             }
 
+            // Give async meta-repo plugins (e.g. MegaProvider) time to finish addRepository() calls
+            delay(400)
             refreshRuntimeState()
 
             val reposAfter = RepositoryManager.getRepositories().map { it.url }.toSet()
             val newlyAddedRepos = (reposAfter - reposBefore).size
             val newlyAddedApis = _loadedApis.value.filter { it.name !in apisBefore }
 
-            // Auto-select newly installed provider if user had none active yet
             if (_activeApi.value == null && newlyAddedApis.isNotEmpty()) {
                 selectProvider(newlyAddedApis.first())
             } else if (newlyAddedApis.isNotEmpty() && _loadedApis.value.size == newlyAddedApis.size) {
@@ -352,7 +541,7 @@ object ExtensionController {
             }
 
             val message = when {
-                newlyAddedRepos > 0 -> "${plugin.name} installed & added $newlyAddedRepos repositories!"
+                newlyAddedRepos > 0 -> "${plugin.name} installed & added $newlyAddedRepos repositories"
                 newlyAddedApis.isNotEmpty() -> "Installed ${plugin.name} (${newlyAddedApis.joinToString { it.name }})"
                 else -> "Installed ${plugin.name}"
             }

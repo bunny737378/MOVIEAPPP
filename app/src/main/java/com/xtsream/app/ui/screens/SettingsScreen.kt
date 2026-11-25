@@ -10,12 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CleaningServices
-import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material.icons.filled.Extension
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,6 +28,7 @@ import com.lagradost.cloudstream3.network.initClient
 import com.xtsream.app.R
 import com.xtsream.app.data.WatchlistStore
 import com.xtsream.app.engine.ExtensionController
+import com.xtsream.app.ui.components.AppIcons
 import com.xtsream.app.ui.theme.AppColors
 import kotlinx.coroutines.delay
 
@@ -57,7 +53,6 @@ fun SettingsScreen(
     val repositories by ExtensionController.repositories.collectAsState()
     val installedPlugins by ExtensionController.installedPlugins.collectAsState()
     val loadedApis by ExtensionController.loadedApis.collectAsState()
-    val activeApi by ExtensionController.activeApi.collectAsState()
     val recentSearches by WatchlistStore.recentSearches.collectAsState()
     val recentViewed by WatchlistStore.recentlyViewed.collectAsState()
 
@@ -65,12 +60,12 @@ fun SettingsScreen(
     val dnsKey = remember { context.getString(R.string.dns_key) }
     var selectedDns by remember { mutableIntStateOf(prefs.getInt(dnsKey, 0)) }
     var showDnsDialog by remember { mutableStateOf(false) }
-    var feedbackBanner by remember { mutableStateOf<String?>(null) }
+    var toastText by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(feedbackBanner) {
-        if (feedbackBanner != null) {
-            delay(3000)
-            feedbackBanner = null
+    LaunchedEffect(toastText) {
+        if (toastText != null) {
+            delay(2800)
+            toastText = null
         }
     }
 
@@ -84,221 +79,97 @@ fun SettingsScreen(
             .background(AppColors.Background)
             .statusBarsPadding()
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Settings",
-                color = AppColors.TextPrimary,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
+        Text(
+            text = "Settings",
+            color = AppColors.TextPrimary,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
+        )
 
-        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Border)
+        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp)
+            contentPadding = PaddingValues(bottom = 24.dp)
         ) {
-            if (feedbackBanner != null) {
-                item(key = "feedback_banner") {
+            if (toastText != null) {
+                item(key = "toast") {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(AppColors.Success.copy(alpha = 0.14f))
-                            .border(0.5.dp, AppColors.Success.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
-                            .padding(horizontal = 14.dp, vertical = 11.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Check,
-                            contentDescription = null,
-                            tint = AppColors.Success,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = feedbackBanner!!,
-                            color = AppColors.TextPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-            }
-
-            // Primary Providers / Extensions Entry Card
-            item(key = "providers_hero") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SectionLabel("EXTENSIONS")
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
+                            .clip(RoundedCornerShape(8.dp))
                             .background(AppColors.SurfaceCard)
-                            .border(1.dp, AppColors.Accent.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
-                            .clickable { onOpenProviders() }
-                            .padding(16.dp),
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(13.dp))
-                                .background(AppColors.AccentDim),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Extension,
-                                contentDescription = null,
-                                tint = AppColors.Accent,
-                                modifier = Modifier.size(26.dp)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(14.dp))
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Providers",
-                                color = AppColors.TextPrimary,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.height(3.dp))
-                            Text(
-                                text = if (installedPlugins.isEmpty() && repositories.isEmpty()) {
-                                    "Add CloudStream repos (e.g. megarepo) & install .cs3 extensions"
-                                } else {
-                                    "${repositories.size} repo(s) • ${installedPlugins.size} installed • ${loadedApis.size} active"
-                                },
-                                color = AppColors.TextSecondary,
-                                fontSize = 12.sp,
-                                lineHeight = 16.sp
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = "Open Providers",
-                            tint = AppColors.Accent,
-                            modifier = Modifier.size(22.dp)
-                        )
+                        Icon(Icons.Filled.Check, null, tint = AppColors.Success, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(toastText!!, color = AppColors.TextPrimary, fontSize = 13.sp)
                     }
                 }
             }
 
-            // Network Section
-            item(key = "network_section") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SectionLabel("NETWORK")
-                    SettingsCardGroup {
-                        SettingsActionRow(
-                            icon = Icons.Filled.Dns,
-                            title = "DNS over HTTPS (DoH)",
-                            subtitle = currentDnsLabel,
-                            onClick = { showDnsDialog = true }
-                        )
-                    }
-                }
+            item(key = "extensions_group") {
+                SettingsCategoryHeader("EXTENSIONS")
+                SettingsFlatRow(
+                    icon = AppIcons.Extension,
+                    title = "Providers",
+                    subtitle = if (installedPlugins.isEmpty() && repositories.isEmpty()) {
+                        "Manage CloudStream repositories & .cs3 extensions"
+                    } else {
+                        "${repositories.size} repositories • ${installedPlugins.size} installed • ${loadedApis.size} active"
+                    },
+                    showChevron = true,
+                    onClick = onOpenProviders
+                )
+                HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
             }
 
-            // Storage & History Section
-            item(key = "storage_section") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SectionLabel("STORAGE & HISTORY")
-                    SettingsCardGroup {
-                        SettingsActionRow(
-                            icon = Icons.Filled.CleaningServices,
-                            title = "Clear HTTP Cache",
-                            subtitle = "Remove cached network responses & repository files",
-                            onClick = {
-                                val freedBytes = ExtensionController.clearHttpCache(context)
-                                val kb = freedBytes / 1024.0
-                                val formatted = if (kb >= 1024.0) {
-                                    String.format("%.1f MB", kb / 1024.0)
-                                } else {
-                                    String.format("%.0f KB", kb)
-                                }
-                                feedbackBanner = "Cleared HTTP cache ($formatted freed)"
-                            }
-                        )
-                        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Border)
-                        SettingsActionRow(
-                            icon = Icons.Filled.DeleteSweep,
-                            title = "Clear Search History",
-                            subtitle = "${recentSearches.size} saved search query(s)",
-                            onClick = {
-                                WatchlistStore.clearRecentSearches()
-                                feedbackBanner = "Search history cleared"
-                            }
-                        )
-                        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Border)
-                        SettingsActionRow(
-                            icon = Icons.Filled.History,
-                            title = "Clear Recently Viewed",
-                            subtitle = "${recentViewed.size} title(s) in viewing history",
-                            onClick = {
-                                WatchlistStore.clearRecentlyViewed()
-                                feedbackBanner = "Recently viewed history cleared"
-                            }
-                        )
-                    }
-                }
+            item(key = "network_group") {
+                SettingsCategoryHeader("NETWORK")
+                SettingsFlatRow(
+                    icon = AppIcons.Dns,
+                    title = "DNS over HTTPS",
+                    subtitle = currentDnsLabel,
+                    showChevron = true,
+                    onClick = { showDnsDialog = true }
+                )
+                HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
             }
 
-            // About / Engine Status
-            item(key = "about_section") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SectionLabel("ABOUT")
-                    SettingsCardGroup {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(AppColors.SurfaceElevated),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Info,
-                                    contentDescription = null,
-                                    tint = AppColors.TextSecondary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "MOVIEAPPP • CloudStream .cs3 Runtime",
-                                    color = AppColors.TextPrimary,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Active provider: ${activeApi?.name ?: "None selected"}\nCatalog, search, and metadata engine enabled. Streaming & downloads are disabled in this build.",
-                                    color = AppColors.TextSecondary,
-                                    fontSize = 12.sp,
-                                    lineHeight = 17.sp
-                                )
-                            }
-                        }
+            item(key = "storage_group") {
+                SettingsCategoryHeader("STORAGE & DATA")
+                SettingsFlatRow(
+                    icon = Icons.Filled.Delete,
+                    title = "Clear HTTP Cache",
+                    subtitle = "Free cached network responses",
+                    onClick = {
+                        val freedBytes = ExtensionController.clearHttpCache(context)
+                        val kb = freedBytes / 1024.0
+                        val formatted = if (kb >= 1024.0) String.format("%.1f MB", kb / 1024.0) else String.format("%.0f KB", kb)
+                        toastText = "Cleared HTTP cache ($formatted freed)"
                     }
-                }
+                )
+                SettingsFlatRow(
+                    icon = Icons.Filled.Delete,
+                    title = "Clear Search History",
+                    subtitle = "${recentSearches.size} saved query(s)",
+                    onClick = {
+                        WatchlistStore.clearRecentSearches()
+                        toastText = "Search history cleared"
+                    }
+                )
+                SettingsFlatRow(
+                    icon = AppIcons.History,
+                    title = "Clear Recently Viewed",
+                    subtitle = "${recentViewed.size} title(s) in history",
+                    onClick = {
+                        WatchlistStore.clearRecentlyViewed()
+                        toastText = "Recently viewed cleared"
+                    }
+                )
             }
         }
     }
@@ -308,26 +179,23 @@ fun SettingsScreen(
             onDismissRequest = { showDnsDialog = false },
             containerColor = AppColors.Surface,
             titleContentColor = AppColors.TextPrimary,
-            title = {
-                Text("DNS over HTTPS", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            },
+            title = { Text("DNS over HTTPS", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     DNS_OPTIONS.forEach { option ->
                         val isSelected = option.id == selectedDns
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (isSelected) AppColors.AccentDim else Color.Transparent)
+                                .clip(RoundedCornerShape(8.dp))
                                 .clickable {
                                     selectedDns = option.id
                                     prefs.edit().putInt(dnsKey, option.id).apply()
                                     app.initClient(context.applicationContext)
                                     showDnsDialog = false
-                                    feedbackBanner = "DNS set to ${option.label}"
+                                    toastText = "DNS set to ${option.label}"
                                 }
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                .padding(horizontal = 8.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(
@@ -336,7 +204,7 @@ fun SettingsScreen(
                                     .clip(CircleShape)
                                     .border(
                                         width = if (isSelected) 5.dp else 1.5.dp,
-                                        color = if (isSelected) AppColors.Accent else AppColors.TextMuted,
+                                        color = if (isSelected) AppColors.Primary else AppColors.TextMuted,
                                         shape = CircleShape
                                     )
                             )
@@ -346,13 +214,9 @@ fun SettingsScreen(
                                     text = option.label,
                                     color = AppColors.TextPrimary,
                                     fontSize = 14.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                 )
-                                Text(
-                                    text = option.subtitle,
-                                    color = AppColors.TextSecondary,
-                                    fontSize = 11.sp
-                                )
+                                Text(option.subtitle, color = AppColors.TextMuted, fontSize = 11.sp)
                             }
                         }
                     }
@@ -360,7 +224,7 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showDnsDialog = false }) {
-                    Text("Close", color = AppColors.Accent)
+                    Text("Close", color = AppColors.Primary)
                 }
             }
         )
@@ -368,77 +232,60 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun SectionLabel(text: String) {
+private fun SettingsCategoryHeader(title: String) {
     Text(
-        text = text,
+        text = title,
         color = AppColors.TextMuted,
         fontSize = 11.sp,
         fontWeight = FontWeight.Bold,
         letterSpacing = 1.sp,
-        modifier = Modifier.padding(horizontal = 4.dp)
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 6.dp)
     )
 }
 
 @Composable
-private fun SettingsCardGroup(content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(AppColors.SurfaceCard)
-            .border(0.5.dp, AppColors.Border, RoundedCornerShape(14.dp)),
-        content = content
-    )
-}
-
-@Composable
-private fun SettingsActionRow(
+private fun SettingsFlatRow(
     icon: ImageVector,
     title: String,
     subtitle: String,
+    showChevron: Boolean = false,
     onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 13.dp),
+            .padding(horizontal = 16.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(AppColors.SurfaceElevated),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = AppColors.TextSecondary,
-                modifier = Modifier.size(19.dp)
-            )
-        }
-        Spacer(modifier = Modifier.width(12.dp))
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = AppColors.TextSecondary,
+            modifier = Modifier.size(22.dp)
+        )
+        Spacer(modifier = Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
                 color = AppColors.TextPrimary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = subtitle,
-                color = AppColors.TextSecondary,
+                color = AppColors.TextMuted,
                 fontSize = 12.sp
             )
         }
-        Icon(
-            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = AppColors.TextMuted,
-            modifier = Modifier.size(20.dp)
-        )
+        if (showChevron) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = AppColors.TextMuted,
+                modifier = Modifier.size(20.dp)
+            )
+        }
     }
 }
