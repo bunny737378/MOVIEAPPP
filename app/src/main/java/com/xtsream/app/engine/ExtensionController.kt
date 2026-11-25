@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Log
 import com.lagradost.cloudstream3.APIHolder
 import com.lagradost.cloudstream3.CloudStreamApp
+import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.UnsafeSSL
 import com.lagradost.cloudstream3.app
@@ -13,6 +14,7 @@ import com.lagradost.cloudstream3.network.clearSharedHttpCache
 import com.lagradost.cloudstream3.network.initClient
 import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.PLUGIN_VERSION_NOT_SET
+import com.lagradost.cloudstream3.plugins.Plugin
 import com.lagradost.cloudstream3.plugins.PluginData
 import com.lagradost.cloudstream3.plugins.PluginManager
 import com.lagradost.cloudstream3.plugins.Repository
@@ -82,7 +84,8 @@ data class InstalledExtensionInfo(
     val sourceLabel: String,
     val providedEntries: List<ProviderEntry>,
     val iconUrl: String? = null,
-    val cachedIconPath: String? = null
+    val cachedIconPath: String? = null,
+    val hasSettings: Boolean = false
 )
 
 object ExtensionController {
@@ -327,12 +330,14 @@ object ExtensionController {
                 }
             }
 
+            val loadedPlugin = PluginManager.plugins[pData.filePath] as? Plugin
             InstalledExtensionInfo(
                 pluginData = pData,
                 sourceLabel = sourceLabel,
                 providedEntries = provided,
                 iconUrl = resolvedIcon,
-                cachedIconPath = cachedFile?.absolutePath
+                cachedIconPath = cachedFile?.absolutePath,
+                hasSettings = loadedPlugin?.openSettings != null
             )
         }
         _installedPlugins.value = installedList
@@ -1122,6 +1127,19 @@ object ExtensionController {
         val enabled = StremioRepository.toggleEnabled(context.applicationContext, manifestUrl)
         refreshRuntimeState()
         return enabled
+    }
+
+    fun openPluginSettings(context: Context, filePath: String): Result<Unit> {
+        val plugin = PluginManager.plugins[filePath] as? Plugin
+            ?: return Result.failure(IllegalStateException("Extension is not loaded"))
+        val opener = plugin.openSettings
+            ?: return Result.failure(IllegalStateException("This extension has no settings"))
+        val hostCtx = CommonActivity.activity?.takeIf { !it.isFinishing && !it.isDestroyed } ?: context
+        return runCatching {
+            opener.invoke(hostCtx)
+        }.onFailure { err ->
+            Log.e(TAG, "Plugin openSettings failed for $filePath", err)
+        }
     }
 
     fun removeStremioAddon(context: Context, manifestUrl: String) {

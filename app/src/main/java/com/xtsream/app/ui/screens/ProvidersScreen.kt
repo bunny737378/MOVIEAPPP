@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -61,9 +63,11 @@ import com.xtsream.app.engine.PluginIconCache
 import com.xtsream.app.engine.ProviderEntry
 import com.xtsream.app.stremio.StremioAddonCategory
 import com.xtsream.app.stremio.StremioAddonRecord
+import com.xtsream.app.stremio.StremioClient
 import com.xtsream.app.ui.components.AppIcons
 import com.xtsream.app.ui.components.AppToastManager
 import com.xtsream.app.ui.components.M3InlineSpinner
+import com.xtsream.app.ui.components.StremioConfigureDialog
 import com.xtsream.app.ui.components.buildCoilRequest
 import com.xtsream.app.ui.theme.AppColors
 import kotlinx.coroutines.launch
@@ -118,6 +122,7 @@ fun ProvidersScreen(
     var selectedStremioCategory by remember { mutableStateOf(StremioAddonCategory.All) }
     var stremioPendingDelete by remember { mutableStateOf<StremioAddonRecord?>(null) }
     var refreshingStremioUrl by remember { mutableStateOf<String?>(null) }
+    var stremioToConfigure by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     // Automatically preload ALL repository extension lists whenever Providers screen opens
     LaunchedEffect(repositories.size) {
@@ -220,14 +225,29 @@ fun ProvidersScreen(
         val raw = stremioInput.trim()
         if (raw.isBlank() || isAddingStremio) return
         focusManager.clearFocus()
+
+        // If user pasted a /configure link directly, open the in-app Stremio configurator right away!
+        val cleanPath = raw.substringBefore('?').trimEnd('/')
+        if (cleanPath.endsWith("/configure", ignoreCase = true)) {
+            val cfgUrl = StremioClient.configureUrlFromRawInput(raw) ?: raw
+            stremioInput = ""
+            stremioToConfigure = "Stremio Addon" to cfgUrl
+            return
+        }
+
         isAddingStremio = true
         scope.launch {
             val result = ExtensionController.addStremioAddon(context, raw)
             isAddingStremio = false
             result.onSuccess { rec ->
                 stremioInput = ""
-                val resSummary = rec.manifest.resourceNames().joinToString(", ").ifBlank { "addon" }
-                AppToastManager.showSuccess("Added ${rec.manifest.name} ($resSummary)")
+                if (rec.manifest.configurationRequired) {
+                    AppToastManager.showSuccess("Added ${rec.manifest.name} — opening configuration...")
+                    stremioToConfigure = rec.manifest.name to rec.configureUrl
+                } else {
+                    val resSummary = rec.manifest.resourceNames().joinToString(", ").ifBlank { "addon" }
+                    AppToastManager.showSuccess("Added ${rec.manifest.name} ($resSummary)")
+                }
             }.onFailure { err ->
                 AppToastManager.showError(err.message ?: "Failed to add Stremio addon")
             }
@@ -462,10 +482,10 @@ fun ProvidersScreen(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
                         )
                     }
-                    items(
+                    itemsIndexed(
                         items = universalCsMatches,
-                        key = { "${it.repo.url}::${it.plugin.internalName}::${it.plugin.url}" }
-                    ) { match ->
+                        key = { idx, it -> "${idx}_${it.repo.url}::${it.plugin.internalName}::${it.plugin.url}" }
+                    ) { _, match ->
                         val installKey = "${match.repo.url}::${match.plugin.internalName}"
                         val isInstalling = installKey in installingKeys
                         val installedVer = ExtensionController.installedVersion(match.repo.url, match.plugin)
@@ -645,7 +665,7 @@ fun ProvidersScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(bottom = 24.dp)
                     ) {
-                        items(installedPlugins, key = { it.pluginData.filePath }) { info ->
+                        itemsIndexed(installedPlugins, key = { idx, it -> "${idx}_${it.pluginData.filePath}" }) { _, info ->
                             InstalledExtensionFlatRow(
                                 info = info,
                                 activeProviderKey = activeProvider?.key,
@@ -653,6 +673,14 @@ fun ProvidersScreen(
                                     ExtensionController.selectProvider(entry)
                                     AppToastManager.showSuccess("Active provider: ${entry.displayName}")
                                 },
+                                onOpenSettings = if (info.hasSettings) {
+                                    {
+                                        ExtensionController.openPluginSettings(context, info.pluginData.filePath)
+                                            .onFailure { err ->
+                                                AppToastManager.showError(err.message ?: "Could not open extension settings")
+                                            }
+                                    }
+                                } else null,
                                 onUninstall = {
                                     scope.launch {
                                         val res = ExtensionController.uninstallPlugin(info.pluginData.filePath)
@@ -752,7 +780,7 @@ fun ProvidersScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 24.dp)
                 ) {
-                    items(filteredStremioAddons, key = { it.manifestUrl }) { addon ->
+                    itemsIndexed(filteredStremioAddons, key = { idx, it -> "${idx}_${it.manifestUrl}" }) { _, addon ->
                         val providerEntry = loadedProviders.firstOrNull {
                             it.isStremio && it.api.sourcePlugin == "stremio::${addon.manifestUrl}"
                         }
@@ -765,6 +793,9 @@ fun ProvidersScreen(
                                 ExtensionController.selectProvider(entry)
                                 AppToastManager.showSuccess("Active provider: ${entry.displayName}")
                             },
+                            onConfigure = if (addon.manifest.configurable || addon.manifest.configurationRequired) {
+                                { stremioToConfigure = addon.manifest.name to addon.configureUrl }
+                            } else null,
                             onToggleEnabled = {
                                 val nowEnabled = ExtensionController.toggleStremioAddon(context, addon.manifestUrl)
                                 AppToastManager.showSuccess(
@@ -847,6 +878,27 @@ fun ProvidersScreen(
                     Text("Cancel", color = AppColors.TextSecondary)
                 }
             }
+        )
+    }
+
+    stremioToConfigure?.let { (addonName, cfgUrl) ->
+        StremioConfigureDialog(
+            addonName = addonName,
+            configureUrl = cfgUrl,
+            onManifestCaptured = { capturedManifestUrl ->
+                stremioToConfigure = null
+                isAddingStremio = true
+                scope.launch {
+                    val res = ExtensionController.addStremioAddon(context, capturedManifestUrl)
+                    isAddingStremio = false
+                    res.onSuccess { rec ->
+                        AppToastManager.showSuccess("Configured ${rec.manifest.name}")
+                    }.onFailure { err ->
+                        AppToastManager.showError(err.message ?: "Failed applying configured addon")
+                    }
+                }
+            },
+            onDismiss = { stremioToConfigure = null }
         )
     }
 }
@@ -1282,6 +1334,7 @@ private fun InstalledExtensionFlatRow(
     info: InstalledExtensionInfo,
     activeProviderKey: String?,
     onSelectEntry: (ProviderEntry) -> Unit,
+    onOpenSettings: (() -> Unit)?,
     onUninstall: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -1317,6 +1370,11 @@ private fun InstalledExtensionFlatRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+                if (onOpenSettings != null) {
+                    IconButton(onClick = onOpenSettings, modifier = Modifier.size(34.dp)) {
+                        Icon(Icons.Filled.Settings, "Extension settings", tint = AppColors.TextSecondary, modifier = Modifier.size(19.dp))
+                    }
                 }
                 IconButton(onClick = onUninstall, modifier = Modifier.size(34.dp)) {
                     Icon(Icons.Filled.Delete, "Remove", tint = AppColors.Danger, modifier = Modifier.size(19.dp))
@@ -1367,6 +1425,7 @@ private fun StremioAddonFlatRow(
     isActiveProvider: Boolean,
     isRefreshing: Boolean,
     onSelectAsActive: (ProviderEntry) -> Unit,
+    onConfigure: (() -> Unit)?,
     onToggleEnabled: () -> Unit,
     onRefresh: () -> Unit,
     onDelete: () -> Unit
@@ -1420,7 +1479,17 @@ private fun StremioAddonFlatRow(
                             fontSize = 11.sp
                         )
                     }
-                    if (addon.manifest.description.isNotBlank()) {
+                    if (addon.manifest.configurationRequired) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Configuration required — tap gear icon to configure",
+                            color = AppColors.Warning,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    } else if (addon.manifest.description.isNotBlank()) {
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = addon.manifest.description,
@@ -1428,6 +1497,17 @@ private fun StremioAddonFlatRow(
                             fontSize = 12.sp,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                if (onConfigure != null) {
+                    IconButton(onClick = onConfigure, modifier = Modifier.size(34.dp)) {
+                        Icon(
+                            imageVector = Icons.Filled.Settings,
+                            contentDescription = "Configure addon",
+                            tint = if (addon.manifest.configurationRequired) AppColors.Warning else AppColors.Primary,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }

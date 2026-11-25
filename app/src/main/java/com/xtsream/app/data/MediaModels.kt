@@ -158,7 +158,7 @@ fun LoadResponse.toMetaUiData(
         )
     }
 
-    val recs = recommendations.orEmpty().map { it.toMediaCardItem(apiKey = apiKey) }
+    val recs = recommendations.orEmpty().map { it.toMediaCardItem(apiKey = apiKey) }.distinctBy { it.url }
     val dubMap = linkedMapOf<String, List<MetaSeasonGroup>>()
     var showStatusLabel: String? = null
 

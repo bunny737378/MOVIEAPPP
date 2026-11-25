@@ -10,9 +10,10 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -265,7 +266,7 @@ fun SearchScreen(
             !state.hasSearched -> {
                 if (state.selectedProviderKey == null && state.tmdbSuggestions.isNotEmpty()) {
                     LazyColumn(contentPadding = PaddingValues(vertical = 6.dp)) {
-                        items(state.tmdbSuggestions, key = { "${it.mediaType}_${it.title}_${it.year}" }) { suggestion ->
+                        itemsIndexed(state.tmdbSuggestions, key = { idx, it -> "${idx}_${it.mediaType}_${it.title}_${it.year}" }) { _, suggestion ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -312,7 +313,7 @@ fun SearchScreen(
                     }
                 } else if (state.selectedProviderKey != null && state.quickSuggestions.isNotEmpty()) {
                     LazyColumn(contentPadding = PaddingValues(vertical = 6.dp)) {
-                        items(state.quickSuggestions, key = { "${it.apiKey}_${it.url}" }) { suggestion ->
+                        itemsIndexed(state.quickSuggestions, key = { idx, it -> "${idx}_${it.apiKey}_${it.url}" }) { _, suggestion ->
                             MediaListRowCard(item = suggestion, onClick = { onMediaClick(suggestion, null) })
                         }
                     }
@@ -454,7 +455,7 @@ fun SearchScreen(
                                     contentPadding = PaddingValues(horizontal = 16.dp),
                                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
-                                    items(group.items, key = { "${group.providerKey}_${it.url}" }) { item ->
+                                    itemsIndexed(group.items, key = { idx, it -> "${idx}_${group.providerKey}_${it.url}" }) { _, item ->
                                         PosterCard(
                                             item = item,
                                             modifier = Modifier.width(116.dp),
@@ -491,7 +492,7 @@ fun SearchScreen(
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(filteredSingleItems, key = { "${it.apiKey}_${it.url}" }) { item ->
+                        gridItemsIndexed(filteredSingleItems, key = { idx, it -> "${idx}_${it.apiKey}_${it.url}" }) { _, item ->
                             PosterCard(item = item, modifier = Modifier.fillMaxWidth(), onClick = { bounds -> onMediaClick(item, bounds) })
                         }
                         if (state.isLoadingMore) {
@@ -519,7 +520,7 @@ fun SearchScreen(
                         contentPadding = PaddingValues(vertical = 8.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(filteredSingleItems, key = { "${it.apiKey}_${it.url}" }) { item ->
+                        itemsIndexed(filteredSingleItems, key = { idx, it -> "${idx}_${it.apiKey}_${it.url}" }) { _, item ->
                             MediaListRowCard(item = item, onClick = { onMediaClick(item, null) })
                         }
                         if (state.isLoadingMore) {

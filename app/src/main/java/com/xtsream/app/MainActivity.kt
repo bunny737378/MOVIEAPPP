@@ -3,12 +3,12 @@ package com.xtsream.app
 import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.BackEventCompat
-import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -20,6 +20,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -67,7 +69,7 @@ private sealed class AppOverlay(val id: Long = System.nanoTime()) {
     class Meta(val item: MediaCardItem, val originBounds: Rect? = null) : AppOverlay()
 }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -300,10 +302,11 @@ private fun OverlayAnimatedLayer(
 ) {
     val density = LocalDensity.current
     val animProgress = remember(overlay.id) { Animatable(0f) }
+    var hasFinishedOpen by remember(overlay.id) { mutableStateOf(false) }
     val closing by overlay.isClosing
     val originBounds = (overlay as? AppOverlay.Meta)?.originBounds
 
-    // Open animation: runs ONCE per overlay instance when pushed
+    // Open animation: runs ONCE per overlay instance when pushed (expands from poster card if bounds exist)
     LaunchedEffect(overlay.id) {
         onResetBackProgress()
         animProgress.animateTo(
@@ -313,15 +316,17 @@ private fun OverlayAnimatedLayer(
                 easing = FastOutSlowInEasing
             )
         )
+        hasFinishedOpen = true
     }
 
-    // Close animation: smoothly shrinks back into origin card (or reverses slide) and removes only this overlay
+    // Close animation: uses the normal clean exit animation (does NOT shrink back into the poster card)
     LaunchedEffect(closing) {
         if (closing) {
+            hasFinishedOpen = true
             animProgress.animateTo(
                 targetValue = 0f,
                 animationSpec = tween(
-                    durationMillis = if (originBounds != null) 260 else 210,
+                    durationMillis = 210,
                     easing = FastOutSlowInEasing
                 )
             )
@@ -333,15 +338,17 @@ private fun OverlayAnimatedLayer(
     val p = animProgress.value
     val bp = if (isTop && !closing) predictiveBackProgress else 0f
 
-    // Dim scrim behind this overlay (only visible for the top overlay to avoid stacking dark scrims)
-    if (isTop) {
-        val scrimAlpha = (0.50f * p * (1f - bp * 0.55f)).coerceIn(0f, 0.50f)
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(ComposeColor.Black.copy(alpha = scrimAlpha))
-        )
-    }
+    // Full-screen touch blocker & dim scrim so taps NEVER bleed through to screens underneath (even during loading!)
+    val scrimAlpha = if (isTop) (0.50f * p * (1f - bp * 0.55f)).coerceIn(0f, 0.50f) else 0f
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(ComposeColor.Black.copy(alpha = scrimAlpha))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {}
+    )
 
     val hasValidCardOrigin = originBounds != null &&
         originBounds.width > 16f &&
@@ -351,27 +358,23 @@ private fun OverlayAnimatedLayer(
         originBounds.left < rootWidthPx &&
         originBounds.top < rootHeightPx
 
-    val effectiveProgress = (p * (1f - bp * 0.35f)).coerceIn(0f, 1f)
+    // Use expand-from-card ONLY while opening; once opened, closing & predictive back use the normal smooth exit!
+    val useCardExpand = hasValidCardOrigin && !hasFinishedOpen && !closing && bp == 0f
 
-    val cornerRadius = if (hasValidCardOrigin) {
-        val cardCorner = 14f
-        if (bp > 0f) (24f * bp).dp else (cardCorner * (1f - effectiveProgress)).dp
+    val cornerRadius = if (useCardExpand) {
+        (14f * (1f - p)).dp
     } else {
         if (bp > 0f) (28f * bp).dp else (22f * (1f - p)).dp
     }
     val shape = RoundedCornerShape(cornerRadius)
 
-    val layerModifier = if (hasValidCardOrigin && originBounds != null) {
+    val layerModifier = if (useCardExpand && originBounds != null) {
         val startScaleX = (originBounds.width / rootWidthPx).coerceIn(0.08f, 1f)
         val startScaleY = (originBounds.height / rootHeightPx).coerceIn(0.08f, 1f)
-        val curScaleX = startScaleX + (1f - startScaleX) * effectiveProgress
-        val curScaleY = startScaleY + (1f - startScaleY) * effectiveProgress
-        val baseTx = originBounds.left * (1f - effectiveProgress)
-        val baseTy = originBounds.top * (1f - effectiveProgress)
-        val swipeShiftX = with(density) {
-            val shift = (28.dp * bp).toPx()
-            if (backSwipeEdge == BackEventCompat.EDGE_RIGHT) -shift else shift
-        }
+        val curScaleX = startScaleX + (1f - startScaleX) * p
+        val curScaleY = startScaleY + (1f - startScaleY) * p
+        val baseTx = originBounds.left * (1f - p)
+        val baseTy = originBounds.top * (1f - p)
 
         Modifier
             .fillMaxSize()
@@ -379,7 +382,7 @@ private fun OverlayAnimatedLayer(
                 transformOrigin = TransformOrigin(0f, 0f)
                 scaleX = curScaleX
                 scaleY = curScaleY
-                translationX = baseTx + swipeShiftX
+                translationX = baseTx
                 translationY = baseTy
                 alpha = (0.35f + 0.65f * (p * 1.6f).coerceIn(0f, 1f)).coerceIn(0f, 1f)
             }
@@ -411,6 +414,10 @@ private fun OverlayAnimatedLayer(
             )
             .clip(shape)
             .background(AppColors.Background)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {}
     ) {
         RenderOverlayScreen(
             overlay = overlay,

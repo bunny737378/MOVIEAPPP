@@ -181,7 +181,10 @@ class SearchViewModel : ViewModel() {
                     try {
                         delay(300)
                         val res = withTimeoutOrNull(12_000L) { targetApi.quickSearch(trimmed) }
-                        val mapped = res.orEmpty().take(8).map { it.toMediaCardItem(apiKey = targetEntry.key) }
+                        val mapped = res.orEmpty()
+                            .map { it.toMediaCardItem(apiKey = targetEntry.key) }
+                            .distinctBy { it.url }
+                            .take(8)
                         if (_uiState.value.selectedProviderKey == selectedKey && _uiState.value.query.trim() == trimmed) {
                             _uiState.update { it.copy(quickSuggestions = mapped) }
                         }
@@ -320,7 +323,10 @@ class SearchViewModel : ViewModel() {
                 }
                 if (searchRequestCounter.get() != myRequestId) return@launch
 
-                val items = respList?.items?.map { it.toMediaCardItem(apiKey = entry.key) }.orEmpty()
+                val items = respList?.items
+                    ?.map { it.toMediaCardItem(apiKey = entry.key) }
+                    ?.distinctBy { it.url }
+                    .orEmpty()
                 _uiState.update {
                     it.copy(
                         isSearching = false,
@@ -394,7 +400,10 @@ class SearchViewModel : ViewModel() {
                             entry.api.search(query, 1)
                         }
                         if (searchRequestCounter.get() != myRequestId) return@launch
-                        val items = respList?.items?.map { it.toMediaCardItem(apiKey = entry.key) }.orEmpty()
+                        val items = respList?.items
+                            ?.map { it.toMediaCardItem(apiKey = entry.key) }
+                            ?.distinctBy { it.url }
+                            .orEmpty()
                         if (items.isNotEmpty()) {
                             _uiState.update { current ->
                                 val updated = (current.globalGroups + ProviderSearchGroup(

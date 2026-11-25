@@ -144,7 +144,7 @@ class HomeViewModel : ViewModel() {
                                                     isHorizontal = homeList.isHorizontalImages || pageData.horizontalImages,
                                                     apiKey = entry.key
                                                 )
-                                            }
+                                            }.distinctBy { it.url }
                                             if (items.isEmpty()) null else HomeSection(
                                                 id = "${entry.key}_${pageData.name}_${homeList.name}",
                                                 title = homeList.name.ifBlank { pageData.name.ifBlank { "Featured" } },

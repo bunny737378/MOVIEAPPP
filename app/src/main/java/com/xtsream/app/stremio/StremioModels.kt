@@ -89,7 +89,12 @@ data class StremioManifest(
         return hasResource(res)
     }
 
-    fun hasBrowseableCatalogs(): Boolean = catalogs.any { !it.hasAnyRequiredExtra() }
+    fun hasBrowseableCatalogs(): Boolean =
+        catalogs.any { !it.hasAnyRequiredExtra() } ||
+            catalogs.any { cat ->
+                cat.extra.filter { it.isRequired }.all { it.name.equals("genre", true) && it.options.isNotEmpty() }
+            }
+
     fun hasSearchableCatalogs(): Boolean = catalogs.any { it.supportsSearch() }
     fun isDiscoveryCapable(): Boolean = hasBrowseableCatalogs() || hasSearchableCatalogs()
 }
@@ -100,7 +105,16 @@ data class StremioAddonRecord(
     val manifest: StremioManifest,
     val enabled: Boolean = true,
     val addedAt: Long = System.currentTimeMillis()
-)
+) {
+    val querySuffix: String
+        get() {
+            val idx = manifestUrl.indexOf('?')
+            return if (idx >= 0) manifestUrl.substring(idx) else ""
+        }
+
+    val configureUrl: String
+        get() = "$baseUrl/configure$querySuffix"
+}
 
 data class StremioMetaLink(
     val name: String,

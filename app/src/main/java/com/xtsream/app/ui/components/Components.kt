@@ -528,7 +528,6 @@ fun PosterCard(
                                             .height(typeHeight)
                                             .clip(typeShape)
                                             .background(AppColors.TypePill)
-                                            .border(0.6.dp, Color(0xFF2E2E36), typeShape)
                                             .padding(horizontal = 4.dp),
                                         contentAlignment = Alignment.Center
                                     ) {

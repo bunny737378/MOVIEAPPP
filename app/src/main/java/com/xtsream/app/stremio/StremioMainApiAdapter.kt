@@ -28,7 +28,8 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Bridges any installed Stremio Addon into the unified MainAPI contract so Stremio addons
  * work seamlessly across Home (catalog rows + Hero + See All with skip pagination),
- * Search (both All-providers & single-provider), and Meta (episodes, seasons, cast, genres, rating).
+ * Search (both All-providers & single-provider, including catalog-only addons), and
+ * Meta (episodes, seasons, cast, genres, rating).
  */
 class StremioMainApiAdapter(
     val addon: StremioAddonRecord
@@ -51,7 +52,6 @@ class StremioMainApiAdapter(
         }
     }
 
-    // Track per-catalog page offsets for skip-based pagination
     private val catalogSkipCache = ConcurrentHashMap<String, Int>()
     private val previewCache = ConcurrentHashMap<String, StremioMetaPreview>()
 
@@ -59,16 +59,28 @@ class StremioMainApiAdapter(
         sourcePlugin = "stremio::${addon.manifestUrl}"
     }
 
-    private val browseCatalogs: List<StremioCatalogDef> =
-        addon.manifest.catalogs.filter { !it.hasAnyRequiredExtra() }.take(16)
+    private val browseCatalogs: List<StremioCatalogDef> = run {
+        val direct = addon.manifest.catalogs.filter { !it.hasAnyRequiredExtra() }
+        if (direct.isNotEmpty()) {
+            direct.take(16)
+        } else {
+            // Support addons whose catalogs only require a selectable genre option
+            addon.manifest.catalogs.filter { cat ->
+                val reqs = cat.extra.filter { it.isRequired }
+                reqs.isNotEmpty() && reqs.all { it.name.equals("genre", true) && it.options.isNotEmpty() }
+            }.take(16)
+        }
+    }
 
     private val searchCatalogs: List<StremioCatalogDef> =
-        addon.manifest.catalogs.filter { it.supportsSearch() }.take(6)
+        addon.manifest.catalogs
+            .filter { it.supportsSearch() }
+            .sortedByDescending { it.isSearchOnly() }
+            .take(16)
 
     override val mainPage: List<MainPageData> = browseCatalogs.mapIndexed { idx, cat ->
-        val displayTitle = formatCatalogTitle(cat)
         MainPageData(
-            name = displayTitle,
+            name = formatCatalogTitle(cat),
             data = "$idx",
             horizontalImages = false
         )
@@ -103,15 +115,16 @@ class StremioMainApiAdapter(
         "stremio://${addon.manifest.id}/${type}/${id}"
 
     private fun parseItemUrl(url: String): Pair<String, String>? {
-        if (!url.startsWith("stremio://")) return null
-        val remainder = url.removePrefix("stremio://")
+        val schemeIdx = url.indexOf("stremio://", ignoreCase = true)
+        if (schemeIdx < 0) return null
+        val remainder = url.substring(schemeIdx + "stremio://".length)
         val firstSlash = remainder.indexOf('/')
         if (firstSlash < 0) return null
         val afterAddon = remainder.substring(firstSlash + 1)
         val secondSlash = afterAddon.indexOf('/')
         if (secondSlash < 0) return null
-        val type = afterAddon.substring(0, secondSlash)
-        val id = afterAddon.substring(secondSlash + 1)
+        val type = afterAddon.substring(0, secondSlash).trim()
+        val id = afterAddon.substring(secondSlash + 1).trim()
         if (type.isBlank() || id.isBlank()) return null
         return type to id
     }
@@ -122,18 +135,19 @@ class StremioMainApiAdapter(
         val tvType = mapTvType(type)
         val parsedScore = imdbRating?.toDoubleOrNull()?.let { Score.from10(it) }
         val parsedYear = extractStartYear(releaseInfo)
+        // CRITICAL: fix = false so MainAPI.fixUrl() NEVER prepends mainUrl in front of stremio://...
         return when (tvType) {
-            TvType.Anime -> newAnimeSearchResponse(name = name, url = itemUrl, type = TvType.Anime) {
+            TvType.Anime -> newAnimeSearchResponse(name = name, url = itemUrl, type = TvType.Anime, fix = false) {
                 posterUrl = poster
                 score = parsedScore
                 year = parsedYear
             }
-            TvType.TvSeries -> newTvSeriesSearchResponse(name = name, url = itemUrl, type = TvType.TvSeries) {
+            TvType.TvSeries -> newTvSeriesSearchResponse(name = name, url = itemUrl, type = TvType.TvSeries, fix = false) {
                 posterUrl = poster
                 score = parsedScore
                 year = parsedYear
             }
-            else -> newMovieSearchResponse(name = name, url = itemUrl, type = tvType) {
+            else -> newMovieSearchResponse(name = name, url = itemUrl, type = tvType, fix = false) {
                 posterUrl = poster
                 score = parsedScore
                 year = parsedYear
@@ -150,15 +164,24 @@ class StremioMainApiAdapter(
             return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
         }
 
+        val defaultRequiredGenre = catalog.extra
+            .firstOrNull { it.name.equals("genre", true) && it.isRequired }
+            ?.options?.firstOrNull()
+
         val skip = if (page <= 1) 0 else (catalogSkipCache[cacheKey] ?: ((page - 1) * 20))
-        val metas = StremioClient.fetchCatalog(addon = addon, catalog = catalog, skip = skip)
+        val metas = StremioClient.fetchCatalog(
+            addon = addon,
+            catalog = catalog,
+            skip = skip,
+            genre = defaultRequiredGenre
+        )
         if (page <= 1) {
             catalogSkipCache[cacheKey] = metas.size
         } else {
             catalogSkipCache[cacheKey] = skip + metas.size
         }
 
-        val responses = metas.map { it.toSearchResponse() }
+        val responses = metas.map { it.toSearchResponse() }.distinctBy { it.url }
         val hasNext = catalog.supportsSkip() && responses.isNotEmpty()
         return newHomePageResponse(
             list = HomePageList(name = request.name, list = responses, isHorizontalImages = false),
@@ -168,21 +191,48 @@ class StremioMainApiAdapter(
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val trimmed = query.trim()
-        if (trimmed.isBlank() || searchCatalogs.isEmpty()) return newSearchResponseList(emptyList(), hasNext = false)
-        if (page > 1 && searchCatalogs.none { it.supportsSkip() }) {
+        if (trimmed.isBlank()) return newSearchResponseList(emptyList(), hasNext = false)
+
+        // 1. Primary path: addon declares searchable catalogs (`extra` or `extraSupported` contains "search")
+        if (searchCatalogs.isNotEmpty()) {
+            if (page > 1 && searchCatalogs.none { it.supportsSkip() }) {
+                return newSearchResponseList(emptyList(), hasNext = false)
+            }
+            val skip = if (page <= 1) 0 else (page - 1) * 20
+            val allResults = coroutineScope {
+                searchCatalogs.map { catalog ->
+                    async {
+                        if (page > 1 && !catalog.supportsSkip()) return@async emptyList()
+                        runCatching {
+                            StremioClient.fetchCatalog(
+                                addon = addon,
+                                catalog = catalog,
+                                skip = skip,
+                                search = trimmed
+                            ).map { it.toSearchResponse() }
+                        }.getOrDefault(emptyList())
+                    }
+                }.awaitAll().flatten()
+            }.distinctBy { it.url }
+
+            val hasNext = searchCatalogs.any { it.supportsSkip() } && allResults.size >= 15
+            return newSearchResponseList(allResults, hasNext = hasNext)
+        }
+
+        // 2. Fallback for catalog-only addons (e.g., Streaming Catalogs, TopLists, MDBList) that do NOT declare `search` extra:
+        //    Only run on page 1; first try server-side search on primary catalogs, then filter browseable catalogs locally.
+        if (page > 1 || browseCatalogs.isEmpty()) {
             return newSearchResponseList(emptyList(), hasNext = false)
         }
 
-        val skip = if (page <= 1) 0 else (page - 1) * 20
-        val allResults = coroutineScope {
-            searchCatalogs.map { catalog ->
+        val probedServer = coroutineScope {
+            browseCatalogs.take(3).map { catalog ->
                 async {
-                    if (page > 1 && !catalog.supportsSkip()) return@async emptyList()
                     runCatching {
                         StremioClient.fetchCatalog(
                             addon = addon,
                             catalog = catalog,
-                            skip = skip,
+                            skip = 0,
                             search = trimmed
                         ).map { it.toSearchResponse() }
                     }.getOrDefault(emptyList())
@@ -190,13 +240,38 @@ class StremioMainApiAdapter(
             }.awaitAll().flatten()
         }.distinctBy { it.url }
 
-        val hasNext = searchCatalogs.any { it.supportsSkip() } && allResults.size >= 15
-        return newSearchResponseList(allResults, hasNext = hasNext)
+        if (probedServer.isNotEmpty()) {
+            return newSearchResponseList(probedServer, hasNext = false)
+        }
+
+        // Local catalog title/genre filter across browseable catalogs so catalog-only addons still return relevant matches
+        val queryTokens = trimmed.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
+        val localMatched = coroutineScope {
+            browseCatalogs.take(6).map { catalog ->
+                async {
+                    val defaultGenre = catalog.extra
+                        .firstOrNull { it.name.equals("genre", true) && it.isRequired }
+                        ?.options?.firstOrNull()
+                    runCatching {
+                        StremioClient.fetchCatalog(addon = addon, catalog = catalog, skip = 0, genre = defaultGenre)
+                            .filter { meta ->
+                                val hay = "${meta.name} ${meta.description.orEmpty()} ${meta.genres.joinToString(" ")}".lowercase()
+                                queryTokens.all { tok -> hay.contains(tok) }
+                            }
+                            .map { it.toSearchResponse() }
+                    }.getOrDefault(emptyList())
+                }
+            }.awaitAll().flatten()
+        }.distinctBy { it.url }
+
+        return newSearchResponseList(localMatched, hasNext = false)
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val (type, id) = parseItemUrl(url) ?: return null
-        val preview = previewCache[url]
+        val canonicalUrl = buildItemUrl(type, id)
+        val preview = previewCache[url] ?: previewCache[canonicalUrl]
+
         val meta = StremioClient.fetchMeta(
             preferredAddon = addon,
             allEnabledAddons = StremioRepository.getEnabledAddons(),
@@ -229,12 +304,14 @@ class StremioMainApiAdapter(
             }
             newTvSeriesLoadResponse(
                 name = title,
-                url = url,
+                url = canonicalUrl,
                 type = if (tvType == TvType.Anime) TvType.Anime else TvType.TvSeries,
                 episodes = episodes
             ) {
+                this.url = canonicalUrl
                 posterUrl = poster
                 backgroundPosterUrl = backdrop
+                logoUrl = meta?.logo ?: preview?.logo
                 plot = plotText
                 year = yearVal
                 score = scoreVal
@@ -245,12 +322,14 @@ class StremioMainApiAdapter(
         } else {
             newMovieLoadResponse(
                 name = title,
-                url = url,
+                url = canonicalUrl,
                 type = tvType,
                 dataUrl = id
             ) {
+                this.url = canonicalUrl
                 posterUrl = poster
                 backgroundPosterUrl = backdrop
+                logoUrl = meta?.logo ?: preview?.logo
                 plot = plotText
                 year = yearVal
                 score = scoreVal

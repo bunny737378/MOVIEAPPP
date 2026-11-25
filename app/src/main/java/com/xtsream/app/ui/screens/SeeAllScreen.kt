@@ -6,9 +6,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -166,7 +166,7 @@ fun SeeAllScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(filteredItems, key = { "${it.apiKey}_${it.url}" }) { item ->
+                gridItemsIndexed(filteredItems, key = { idx, it -> "${idx}_${it.apiKey}_${it.url}" }) { _, item ->
                     PosterCard(item = item, modifier = Modifier.fillMaxWidth(), onClick = { bounds -> onMediaClick(item, bounds) })
                 }
                 if (state.isLoadingMore) {
@@ -194,7 +194,7 @@ fun SeeAllScreen(
                 contentPadding = PaddingValues(vertical = 8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(filteredItems, key = { "${it.apiKey}_${it.url}" }) { item ->
+                itemsIndexed(filteredItems, key = { idx, it -> "${idx}_${it.apiKey}_${it.url}" }) { _, item ->
                     MediaListRowCard(item = item, onClick = { onMediaClick(item, null) })
                 }
                 if (state.isLoadingMore) {

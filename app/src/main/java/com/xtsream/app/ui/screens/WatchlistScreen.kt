@@ -6,8 +6,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
@@ -106,7 +106,7 @@ fun WatchlistScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(watchlist, key = { "${it.apiKey}_${it.url}" }) { item ->
+                    gridItemsIndexed(watchlist, key = { idx, it -> "${idx}_${it.apiKey}_${it.url}" }) { _, item ->
                         PosterCard(
                             item = item,
                             modifier = Modifier.fillMaxWidth(),
@@ -135,7 +135,7 @@ fun WatchlistScreen(
                     contentPadding = PaddingValues(vertical = 8.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(recentViewed, key = { "${it.apiKey}_${it.url}" }) { item ->
+                    itemsIndexed(recentViewed, key = { idx, it -> "${idx}_${it.apiKey}_${it.url}" }) { _, item ->
                         MediaListRowCard(
                             item = item,
                             onClick = { onMediaClick(item, null) },

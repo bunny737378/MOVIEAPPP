@@ -18,7 +18,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -98,6 +98,10 @@ fun MetaScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(AppColors.Background)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {}
     ) {
         when {
             state.isLoading -> {
@@ -533,7 +537,7 @@ private fun MetaLoadedContent(
 
                 when (episodeLayout) {
                     EpisodeLayoutMode.Detailed -> {
-                        items(visibleEpisodes, key = { "ep_det_${it.season}_${it.number}_${it.data}" }) { ep ->
+                        itemsIndexed(visibleEpisodes, key = { idx, it -> "ep_det_${idx}_${it.season}_${it.number}_${it.data}" }) { _, ep ->
                             BorderlessDetailedEpisodeRow(
                                 episode = ep,
                                 fallbackPoster = meta.backgroundUrl ?: meta.posterUrl,
@@ -547,7 +551,7 @@ private fun MetaLoadedContent(
                     }
 
                     EpisodeLayoutMode.Compact -> {
-                        items(visibleEpisodes, key = { "ep_cmp_${it.season}_${it.number}_${it.data}" }) { ep ->
+                        itemsIndexed(visibleEpisodes, key = { idx, it -> "ep_cmp_${idx}_${it.season}_${it.number}_${it.data}" }) { _, ep ->
                             BorderlessCompactEpisodeRow(
                                 episode = ep,
                                 onClick = {
@@ -618,7 +622,7 @@ private fun MetaLoadedContent(
                             contentPadding = PaddingValues(horizontal = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            items(meta.recommendations, key = { "rec_${it.url}" }) { rec ->
+                            itemsIndexed(meta.recommendations, key = { idx, it -> "rec_${idx}_${it.url}" }) { _, rec ->
                                 PosterCard(
                                     item = rec,
                                     modifier = Modifier.width(118.dp),
@@ -1127,7 +1131,7 @@ private fun DescriptionPanelBody(
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    items(meta.actors, key = { "${it.name}_${it.role}" }) { actor ->
+                    itemsIndexed(meta.actors, key = { idx, it -> "${idx}_${it.name}_${it.role}" }) { _, actor ->
                         ActorItem(actor = actor, headers = meta.posterHeaders)
                     }
                 }

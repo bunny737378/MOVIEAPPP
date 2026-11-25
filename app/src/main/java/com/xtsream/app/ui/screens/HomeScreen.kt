@@ -13,7 +13,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -233,7 +233,7 @@ fun HomeScreen(
                             }
                         }
 
-                        items(state.sections, key = { it.id }) { section ->
+                        itemsIndexed(state.sections, key = { idx, s -> "${idx}_${s.id}" }) { _, section ->
                             HomeSectionRow(
                                 section = section,
                                 onMediaClick = onMediaClick,
@@ -568,7 +568,7 @@ private fun HomeSectionRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(section.items, key = { "${section.id}_${it.url}" }) { item ->
+            itemsIndexed(section.items, key = { idx, it -> "${idx}_${section.id}_${it.url}" }) { _, item ->
                 PosterCard(
                     item = item,
                     forceHorizontal = section.isHorizontal,

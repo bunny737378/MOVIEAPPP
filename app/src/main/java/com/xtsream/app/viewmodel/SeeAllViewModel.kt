@@ -79,7 +79,7 @@ class SeeAllViewModel : ViewModel() {
                 _uiState.value = SeeAllUiState(
                     title = newSource.title,
                     subtitle = newSource.displayName,
-                    items = newSource.initialItems,
+                    items = newSource.initialItems.distinctBy { it.url },
                     hasMore = newSource.hasNext,
                     nextPage = 2
                 )
@@ -88,7 +88,7 @@ class SeeAllViewModel : ViewModel() {
                 _uiState.value = SeeAllUiState(
                     title = newSource.displayName,
                     subtitle = "Results for \"${newSource.query}\"",
-                    items = newSource.initialItems,
+                    items = newSource.initialItems.distinctBy { it.url },
                     hasMore = newSource.hasNext,
                     nextPage = 2
                 )
