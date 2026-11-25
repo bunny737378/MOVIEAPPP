@@ -73,13 +73,13 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT)
         )
 
-        CommonActivity.setActivityInstance(this)
-        WatchlistStore.init(applicationContext)
+        runCatching { CommonActivity.setActivityInstance(this) }
+        runCatching { WatchlistStore.init(applicationContext) }
 
         setContent {
             MovieAppTheme {
                 LaunchedEffect(Unit) {
-                    ExtensionController.initialize(applicationContext)
+                    runCatching { ExtensionController.initialize(applicationContext) }
                 }
                 MovieAppRoot()
             }

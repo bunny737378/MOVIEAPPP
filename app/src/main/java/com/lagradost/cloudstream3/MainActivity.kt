@@ -1,6 +1,5 @@
 package com.lagradost.cloudstream3
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -53,22 +52,10 @@ var insecureApp = Requests(responseParser = jsonResponseParser).apply {
  * matching upstream CloudStream3 bytecode signatures so plugins referencing
  * `MainActivity::class.java`, `MainActivity.afterPluginsLoadedEvent`, `activityResultLauncher`,
  * `handleAppIntentUrl`, etc. link cleanly without NoClassDefFoundError/NoSuchFieldError.
+ * Intentionally does NOT subclass android.app.Activity so `com.xtsream.app.MainActivity`
+ * remains the sole Activity class in the APK.
  */
-class MainActivity : Activity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        runCatching {
-            startActivity(
-                Intent(this, com.xtsream.app.MainActivity::class.java).addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP
-                )
-            )
-        }
-        finish()
-    }
-
+open class MainActivity {
     companion object {
         @Volatile
         var activityResultLauncher: ActivityResultLauncher<Intent>? = null
