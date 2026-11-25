@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">MOVIEAPPP</string>
+    <string name="dns_key">dns_pref</string>
+    <string name="jsdelivr_proxy_key">jsdelivr_proxy_key</string>
 </resources>

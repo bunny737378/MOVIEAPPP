@@ -1,26 +1,86 @@
 [versions]
-agp = "8.13.0"
-kotlin = "2.1.0"
+agp = "9.1.1"
+kotlin = "2.4.0"
 coreKtx = "1.17.0"
+activityCompose = "1.10.1"
 appcompat = "1.7.1"
-material = "1.14.0"
-constraintlayout = "2.2.1"
-quickjs = "0.9.2"
-coil = "2.6.0"
+fragmentKtx = "1.8.6"
+preferenceKtx = "1.2.1"
+material = "1.12.0"
+annotation = "1.9.1"
+palette = "1.0.0"
+lifecycle = "2.9.0"
+composeBom = "2025.05.00"
+coil3 = "3.3.0"
 okhttp = "4.12.0"
-coroutines = "1.7.3"
+nicehttp = "0.4.18"
+conscryptAndroid = { strictly = "2.5.2" }
+jacksonModuleKotlin = { strictly = "2.13.1" }
+rhino = { strictly = "1.8.1" }
+jsoup = "1.22.1"
+ksoup = "0.2.6"
+ktor = "3.5.0"
+cryptography = "0.6.0"
+newpipeextractor = "v0.26.3"
+kotlinxCoroutines = "1.11.0"
+kotlinxSerializationJson = "1.11.0"
+kotlinxDatetime = "0.8.0"
+kotlinxIOCore = "0.9.1"
+kotlinxAtomicfu = "0.33.0"
+kotlinxCollectionsImmutable = "0.5.2"
+gson = "2.11.0"
+fuzzywuzzy = "1.4.0"
+desugarJdkLibsNio = "2.1.5"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+androidx-fragment-ktx = { group = "androidx.fragment", name = "fragment-ktx", version.ref = "fragmentKtx" }
+androidx-preference-ktx = { group = "androidx.preference", name = "preference-ktx", version.ref = "preferenceKtx" }
+androidx-annotation = { group = "androidx.annotation", name = "annotation", version.ref = "annotation" }
+androidx-palette = { group = "androidx.palette", name = "palette-ktx", version.ref = "palette" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
-androidx-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
-quickjs = { group = "app.cash.quickjs", name = "quickjs-android", version.ref = "quickjs" }
-coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
+
+compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+compose-ui = { group = "androidx.compose.ui", name = "ui" }
+compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
+compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+
+coil3 = { module = "io.coil-kt.coil3:coil", version.ref = "coil3" }
+coil3-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil3" }
+coil3-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil3" }
+
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+okhttp-dnsoverhttps = { group = "com.squareup.okhttp3", name = "okhttp-dnsoverhttps", version.ref = "okhttp" }
+nicehttp = { module = "com.github.Blatzar:NiceHttp", version.ref = "nicehttp" }
+conscrypt-android = { module = "org.conscrypt:conscrypt-android", version.ref = "conscryptAndroid" }
+jackson-module-kotlin = { module = "com.fasterxml.jackson.module:jackson-module-kotlin", version.ref = "jacksonModuleKotlin" }
+jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
+ksoup = { module = "com.fleeksoft.ksoup:ksoup", version.ref = "ksoup" }
+ktor-http = { module = "io.ktor:ktor-http", version.ref = "ktor" }
+rhino = { module = "org.mozilla:rhino", version.ref = "rhino" }
+cryptography-core = { module = "dev.whyoleg.cryptography:cryptography-core", version.ref = "cryptography" }
+cryptography-provider-optimal = { module = "dev.whyoleg.cryptography:cryptography-provider-optimal", version.ref = "cryptography" }
+newpipeextractor = { module = "com.github.teamnewpipe:NewPipeExtractor", version.ref = "newpipeextractor" }
+kotlin-reflect = { module = "org.jetbrains.kotlin:kotlin-reflect", version.ref = "kotlin" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
+kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinxDatetime" }
+kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinxIOCore" }
+kotlinx-atomicfu = { module = "org.jetbrains.kotlinx:atomicfu", version.ref = "kotlinxAtomicfu" }
+kotlinx-collections-immutable = { module = "org.jetbrains.kotlinx:kotlinx-collections-immutable", version.ref = "kotlinxCollectionsImmutable" }
+gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+fuzzywuzzy = { module = "me.xdrop:fuzzywuzzy", version.ref = "fuzzywuzzy" }
+desugar-jdk-libs-nio = { module = "com.android.tools:desugar_jdk_libs_nio", version.ref = "desugarJdkLibsNio" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-plugin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
