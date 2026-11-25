@@ -42,13 +42,8 @@ private val DNS_OPTIONS = listOf(
 )
 
 @Composable
-fun SettingsScreen(
-    onOpenProviders: () -> Unit
-) {
+fun SettingsScreen() {
     val context = LocalContext.current
-    val repositories by ExtensionController.repositories.collectAsState()
-    val installedPlugins by ExtensionController.installedPlugins.collectAsState()
-    val loadedProviders by ExtensionController.loadedProviders.collectAsState()
     val recentSearches by WatchlistStore.recentSearches.collectAsState()
     val recentViewed by WatchlistStore.recentlyViewed.collectAsState()
 
@@ -81,22 +76,6 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 24.dp)
         ) {
-            item(key = "extensions_group") {
-                SettingsCategoryHeader("EXTENSIONS")
-                SettingsFlatRow(
-                    icon = AppIcons.Extension,
-                    title = "Providers",
-                    subtitle = if (installedPlugins.isEmpty() && repositories.isEmpty()) {
-                        "Manage CloudStream repositories & .cs3 extensions"
-                    } else {
-                        "${repositories.size} repositories • ${installedPlugins.size} installed • ${loadedProviders.size} active"
-                    },
-                    showChevron = true,
-                    onClick = onOpenProviders
-                )
-                HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
-            }
-
             item(key = "network_group") {
                 SettingsCategoryHeader("NETWORK")
                 SettingsFlatRow(

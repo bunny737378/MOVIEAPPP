@@ -35,6 +35,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -84,7 +85,7 @@ private enum class ActiveMetaPanel {
 fun MetaScreen(
     item: MediaCardItem,
     onBack: () -> Unit,
-    onMediaClick: (MediaCardItem) -> Unit
+    onMediaClick: (MediaCardItem, Rect?) -> Unit
 ) {
     val vm: MetaViewModel = viewModel(key = "meta_${item.apiKey}_${item.url}")
     LaunchedEffect(item.apiKey, item.url) { vm.load(item) }
@@ -184,7 +185,7 @@ private fun MetaLoadedContent(
     isSaved: Boolean,
     onBack: () -> Unit,
     onToggleWatchlist: () -> Unit,
-    onMediaClick: (MediaCardItem) -> Unit
+    onMediaClick: (MediaCardItem, Rect?) -> Unit
 ) {
     val context = LocalContext.current
 
@@ -621,7 +622,7 @@ private fun MetaLoadedContent(
                                 PosterCard(
                                     item = rec,
                                     modifier = Modifier.width(118.dp),
-                                    onClick = { onMediaClick(rec) }
+                                    onClick = { bounds -> onMediaClick(rec, bounds) }
                                 )
                             }
                         }

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -25,11 +26,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,6 +59,7 @@ enum class MainTab(
     Home("Home", Icons.Filled.Home, Icons.Outlined.Home),
     Search("Search", Icons.Filled.Search, Icons.Outlined.Search),
     Library("Library", AppIcons.Bookmarks, AppIcons.BookmarksOutlined),
+    Providers("Providers", AppIcons.Extension, AppIcons.Extension),
     Settings("Settings", Icons.Filled.Settings, Icons.Outlined.Settings)
 }
 
@@ -241,7 +248,7 @@ fun PosterCard(
     modifier: Modifier = Modifier,
     forceHorizontal: Boolean = false,
     notchBgColor: Color = AppColors.Background,
-    onClick: () -> Unit
+    onClick: (Rect?) -> Unit
 ) {
     val context = LocalContext.current
     val horizontal = forceHorizontal || item.isHorizontal
@@ -264,16 +271,21 @@ fun PosterCard(
     val typeHeight = 16.dp
     val innerCutRadius = 11.dp
 
+    var posterBounds by remember { mutableStateOf<Rect?>(null) }
+
     Column(
         modifier = modifier.clickable(
             interactionSource = remember { MutableInteractionSource() },
             indication = null
-        ) { onClick() }
+        ) { onClick(posterBounds) }
     ) {
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(aspectRatio)
+                .onGloballyPositioned { coords ->
+                    posterBounds = coords.boundsInRoot()
+                }
         ) {
             // Bottom-left stack width is ALWAYS fixed to half the poster width
             val notchStackWidth = (maxWidth * 0.50f).coerceAtLeast(48.dp)
@@ -516,6 +528,7 @@ fun PosterCard(
                                             .height(typeHeight)
                                             .clip(typeShape)
                                             .background(AppColors.TypePill)
+                                            .border(0.6.dp, Color(0xFF2E2E36), typeShape)
                                             .padding(horizontal = 4.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
@@ -560,9 +573,9 @@ fun PosterCard(
 }
 
 /**
- * Sub/Dub mini badge inside the half-poster-width notch:
- * - If episode count exists: crisp icon + count number
- * - If episode count is null: ONLY slightly larger centered icon (NO "SUB"/"DUB" text!)
+ * White Sub/Dub mini badge with crisp dark ink inside the half-poster-width notch.
+ * Automatically scales icon, spacing, and font size down so even 4-digit counts (e.g. 1120)
+ * fit cleanly without clipping.
  */
 @Composable
 private fun AudioBadgeBox(
@@ -573,38 +586,82 @@ private fun AudioBadgeBox(
     height: Dp,
     modifier: Modifier = Modifier
 ) {
-    Row(
+    val ink = AppColors.AudioBadgeInk
+    BoxWithConstraints(
         modifier = modifier
             .height(height)
             .clip(shape)
-            .background(bgColor)
-            .padding(horizontal = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center
+            .background(bgColor),
+        contentAlignment = Alignment.Center
     ) {
+        val boxWidthDp = maxWidth.value
         if (count != null && count > 0) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(9.dp)
-            )
-            Spacer(modifier = Modifier.width(2.dp))
-            Text(
-                text = count.toString(),
-                color = Color.White,
-                fontSize = 8.sp,
-                fontWeight = FontWeight.ExtraBold,
-                lineHeight = 8.sp,
-                maxLines = 1,
-                softWrap = false
-            )
+            val countText = count.toString()
+            val digits = countText.length
+            val isTight = boxWidthDp < 36f
+
+            val initialFontSp = when {
+                digits >= 4 && isTight -> 5.8f
+                digits >= 4 -> 6.8f
+                digits == 3 && isTight -> 6.8f
+                digits == 3 -> 7.4f
+                else -> 8.0f
+            }
+            val iconDp = when {
+                digits >= 4 && isTight -> 6.0.dp
+                digits >= 4 -> 7.0.dp
+                digits == 3 && isTight -> 7.2.dp
+                else -> 8.5.dp
+            }
+            val gapDp = when {
+                digits >= 4 && isTight -> 1.dp
+                digits >= 3 -> 1.5.dp
+                else -> 2.dp
+            }
+            val hPadDp = if (digits >= 4 && isTight) 1.dp else 2.dp
+
+            var fittedFontSp by remember(countText, boxWidthDp) { mutableFloatStateOf(initialFontSp) }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = hPadDp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = ink,
+                    modifier = Modifier.size(iconDp)
+                )
+                Spacer(modifier = Modifier.width(gapDp))
+                Text(
+                    text = countText,
+                    color = ink,
+                    style = TextStyle(
+                        fontSize = fittedFontSp.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        lineHeight = fittedFontSp.sp,
+                        letterSpacing = if (digits >= 4) (-0.3).sp else 0.sp,
+                        platformStyle = PlatformTextStyle(includeFontPadding = false)
+                    ),
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Visible,
+                    onTextLayout = { result ->
+                        if (result.didOverflowWidth && fittedFontSp > 4.2f) {
+                            fittedFontSp = (fittedFontSp - 0.5f).coerceAtLeast(4.2f)
+                        }
+                    }
+                )
+            }
         } else {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(12.dp)
+                tint = ink,
+                modifier = Modifier.size(11.5.dp)
             )
         }
     }
@@ -978,8 +1035,8 @@ fun ProviderPickerSheet(
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                             )
                             val meta = listOfNotNull(
-                                if (entry.isDuplicateName) entry.sourceLabel else null,
-                                entry.api.lang.uppercase().takeIf { it.isNotBlank() },
+                                if (entry.isStremio) "Stremio" else if (entry.isDuplicateName) entry.sourceLabel else null,
+                                entry.api.lang.uppercase().takeIf { it.isNotBlank() && !entry.isStremio },
                                 entry.api.supportedTypes.take(3).joinToString(" • ") { it.name }.takeIf { it.isNotBlank() }
                             ).joinToString("  •  ")
                             if (meta.isNotBlank()) {

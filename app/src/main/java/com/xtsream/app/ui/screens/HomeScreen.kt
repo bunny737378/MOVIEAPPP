@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -71,7 +72,7 @@ fun HomeScreen(
     homeViewModel: HomeViewModel,
     barsVisible: Boolean = true,
     onBarsVisibilityChange: (Boolean) -> Unit = {},
-    onMediaClick: (MediaCardItem) -> Unit,
+    onMediaClick: (MediaCardItem, Rect?) -> Unit,
     onSeeAllSection: (HomeSection) -> Unit,
     onOpenProviders: () -> Unit,
     onSearchActiveProvider: (ProviderEntry) -> Unit
@@ -217,7 +218,7 @@ fun HomeScreen(
                                 FullBleedHeroSlider(
                                     items = state.featuredItems,
                                     watchlistUrls = watchlist.map { it.url }.toSet(),
-                                    onDetailsClick = onMediaClick,
+                                    onDetailsClick = { item -> onMediaClick(item, null) },
                                     onToggleBookmark = { item ->
                                         val added = WatchlistStore.toggleWatchlist(item)
                                         AppToastManager.showSuccess(
@@ -528,7 +529,7 @@ private fun FullBleedHeroSlider(
 @Composable
 private fun HomeSectionRow(
     section: HomeSection,
-    onMediaClick: (MediaCardItem) -> Unit,
+    onMediaClick: (MediaCardItem, Rect?) -> Unit,
     onSeeAllClick: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -572,7 +573,7 @@ private fun HomeSectionRow(
                     item = item,
                     forceHorizontal = section.isHorizontal,
                     modifier = Modifier.width(cardWidth),
-                    onClick = { onMediaClick(item) }
+                    onClick = { bounds -> onMediaClick(item, bounds) }
                 )
             }
         }

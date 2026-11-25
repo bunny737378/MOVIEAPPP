@@ -33,6 +33,7 @@ data class PluginData(
     @JsonProperty("isOnline") @SerialName("isOnline") val isOnline: Boolean,
     @JsonProperty("filePath") @SerialName("filePath") val filePath: String,
     @JsonProperty("version") @SerialName("version") val version: Int,
+    @JsonProperty("iconUrl") @SerialName("iconUrl") val iconUrl: String? = null,
 )
 
 /**

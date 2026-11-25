@@ -26,9 +26,10 @@ object AppColors {
     // Poster cutout badge accents (high-contrast, balanced)
     val Gold = Color(0xFFF5BE18)
     val OnGold = Color(0xFF161209)
-    val SubPill = Color(0xFF6E54E8)
-    val DubPill = Color(0xFF0E9686)
-    val TypePill = Color(0xFFD92632)
+    val SubPill = Color(0xFFF5F5F7)
+    val DubPill = Color(0xFFF5F5F7)
+    val AudioBadgeInk = Color(0xFF111114)
+    val TypePill = Color(0xFF0A0A0D)
     val EpisodePill = Color(0xFF2F2F3B)
 
     val SubGreen = Color(0xFF4ADE80)

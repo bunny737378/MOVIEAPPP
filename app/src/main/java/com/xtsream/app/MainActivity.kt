@@ -21,6 +21,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,7 +30,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -58,9 +61,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 
 private sealed class AppOverlay(val id: Long = System.nanoTime()) {
-    class Providers : AppOverlay()
+    val isClosing = mutableStateOf(false)
+
     class SeeAll(val source: SeeAllSource) : AppOverlay()
-    class Meta(val item: MediaCardItem) : AppOverlay()
+    class Meta(val item: MediaCardItem, val originBounds: Rect? = null) : AppOverlay()
 }
 
 class MainActivity : ComponentActivity() {
@@ -109,31 +113,35 @@ private fun MovieAppRoot() {
         }
     }
 
-    fun openMeta(item: MediaCardItem) {
-        overlayStack.add(AppOverlay.Meta(item))
+    fun openMeta(item: MediaCardItem, originBounds: Rect? = null) {
+        overlayStack.add(AppOverlay.Meta(item, originBounds))
     }
 
-    fun openProviders() {
-        if (overlayStack.lastOrNull() !is AppOverlay.Providers) {
-            overlayStack.add(AppOverlay.Providers())
-        }
+    fun openProvidersTab() {
+        overlayStack.clear()
+        selectedTab = MainTab.Providers
     }
 
     fun openSeeAll(source: SeeAllSource) {
         overlayStack.add(AppOverlay.SeeAll(source))
     }
 
-    fun popOverlay() {
-        if (overlayStack.isNotEmpty()) {
-            overlayStack.removeAt(overlayStack.lastIndex)
+    fun requestCloseTopOverlay() {
+        val top = overlayStack.lastOrNull() ?: return
+        if (!top.isClosing.value) {
+            top.isClosing.value = true
         }
+    }
+
+    fun removeOverlay(overlay: AppOverlay) {
+        overlayStack.remove(overlay)
     }
 
     BackHandler(enabled = overlayStack.isEmpty() && selectedTab != MainTab.Home) {
         selectedTab = MainTab.Home
     }
 
-    // Real Android Predictive Back Gesture state for sub-page overlays
+    // Real Android Predictive Back Gesture state for the top active overlay
     val backProgress = remember { Animatable(0f) }
     var backSwipeEdge by remember { mutableIntStateOf(BackEventCompat.EDGE_LEFT) }
 
@@ -143,8 +151,8 @@ private fun MovieAppRoot() {
                 backSwipeEdge = backEvent.swipeEdge
                 backProgress.snapTo(backEvent.progress.coerceIn(0f, 1f))
             }
-            popOverlay()
-            backProgress.snapTo(0f)
+            // Trigger smooth shrink-back / exit animation on top overlay; underlying sub-pages stay completely still!
+            requestCloseTopOverlay()
         } catch (_: CancellationException) {
             backProgress.animateTo(
                 targetValue = 0f,
@@ -156,11 +164,14 @@ private fun MovieAppRoot() {
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(AppColors.Background)
     ) {
+        val rootWidthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+        val rootHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+
         // Main Tabs Layer — Home uses overlaid auto-hiding BottomBar; other tabs dock cleanly above BottomBar
         if (selectedTab == MainTab.Home) {
             Box(modifier = Modifier.fillMaxSize()) {
@@ -184,7 +195,7 @@ private fun MovieAppRoot() {
                             )
                         )
                     },
-                    onOpenProviders = ::openProviders,
+                    onOpenProviders = ::openProvidersTab,
                     onSearchActiveProvider = { entry ->
                         searchViewModel.focusProviderScope(entry.key)
                         selectedTab = MainTab.Search
@@ -222,16 +233,16 @@ private fun MovieAppRoot() {
                                     )
                                 )
                             },
-                            onOpenProviders = ::openProviders
+                            onOpenProviders = ::openProvidersTab
                         )
 
                         MainTab.Library -> WatchlistScreen(
                             onMediaClick = ::openMeta
                         )
 
-                        MainTab.Settings -> SettingsScreen(
-                            onOpenProviders = ::openProviders
-                        )
+                        MainTab.Providers -> ProvidersScreen(onBack = null)
+
+                        MainTab.Settings -> SettingsScreen()
 
                         MainTab.Home -> Unit
                     }
@@ -243,89 +254,28 @@ private fun MovieAppRoot() {
             }
         }
 
-        // Render previous overlay (if depth >= 2) so Predictive Back reveals the immediate parent overlay
-        val stackSize = overlayStack.size
-        if (stackSize >= 2) {
-            val previousOverlay = overlayStack[stackSize - 2]
-            key(previousOverlay.id) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    RenderOverlayScreen(
-                        overlay = previousOverlay,
-                        onBack = ::popOverlay,
-                        onMediaClick = ::openMeta
-                    )
-                }
+        // Single stable keyed loop for ALL active overlays:
+        // Previously opened sub-pages stay at progress=1f in their EXACT composable slot,
+        // so popping a child sub-page NEVER replays the parent sub-page's open animation!
+        overlayStack.forEachIndexed { index, overlay ->
+            val isTop = index == overlayStack.lastIndex
+            key(overlay.id) {
+                OverlayAnimatedLayer(
+                    overlay = overlay,
+                    isTop = isTop,
+                    rootWidthPx = rootWidthPx,
+                    rootHeightPx = rootHeightPx,
+                    predictiveBackProgress = if (isTop) backProgress.value else 0f,
+                    backSwipeEdge = backSwipeEdge,
+                    onResetBackProgress = { backProgress.snapTo(0f) },
+                    onRequestClose = { requestCloseTopOverlay() },
+                    onRemoved = { removeOverlay(overlay) },
+                    onMediaClick = ::openMeta
+                )
             }
         }
 
-        // Top active sub-page with soft dark shadow on the previous page underneath throughout open & back-swipe
-        val topOverlay = overlayStack.lastOrNull()
-        if (topOverlay != null) {
-            val progress = backProgress.value
-            val density = LocalDensity.current
-
-            // Previous-page shadow scrim: stays softly dark while sub-page is open/swiped, disappears cleanly on close
-            val scrimAlpha = (0.50f * (1f - progress * 0.55f)).coerceIn(0f, 0.50f)
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(ComposeColor.Black.copy(alpha = scrimAlpha))
-            )
-
-            key(topOverlay.id) {
-                val enterProgress = remember(topOverlay.id) { Animatable(0f) }
-                LaunchedEffect(topOverlay.id) {
-                    backProgress.snapTo(0f)
-                    enterProgress.animateTo(
-                        targetValue = 1f,
-                        animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing)
-                    )
-                }
-
-                val e = enterProgress.value
-                val enterScale = 0.94f + (0.06f * e)
-                val enterTranslateY = with(density) { (36.dp * (1f - e)).toPx() }
-                val enterCornerDp = (22f * (1f - e)).dp
-
-                val backScale = 1f - (0.14f * progress)
-                val backTranslateX = with(density) {
-                    val shift = (44.dp * progress).toPx()
-                    if (backSwipeEdge == BackEventCompat.EDGE_RIGHT) -shift else shift
-                }
-                val backCornerDp = (28f * progress).dp
-
-                val combinedScale = enterScale * backScale
-                val cornerRadius = if (progress > 0f) backCornerDp else enterCornerDp
-                val shape = RoundedCornerShape(cornerRadius)
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            scaleX = combinedScale
-                            scaleY = combinedScale
-                            translationX = backTranslateX
-                            translationY = enterTranslateY
-                            alpha = (0.35f + 0.65f * e).coerceIn(0f, 1f)
-                        }
-                        .shadow(
-                            elevation = if (progress > 0f || e < 1f) 22.dp else 0.dp,
-                            shape = shape,
-                            clip = false
-                        )
-                        .clip(shape)
-                        .background(AppColors.Background)
-                ) {
-                    RenderOverlayScreen(
-                        overlay = topOverlay,
-                        onBack = ::popOverlay,
-                        onMediaClick = ::openMeta
-                    )
-                }
-            }
-        }
-
-        // Interactive Cloudflare Turnstile fallback (only appears if headless bypass encounters a hard CAPTCHA)
+        // Two-stage Cloudflare verification (Confirmation Popup -> Floating Resizable/Draggable Mini-Window)
         CloudflareVerifyDialog()
 
         // Global Top Overlay Toast Notification Popup
@@ -336,13 +286,147 @@ private fun MovieAppRoot() {
 }
 
 @Composable
+private fun OverlayAnimatedLayer(
+    overlay: AppOverlay,
+    isTop: Boolean,
+    rootWidthPx: Float,
+    rootHeightPx: Float,
+    predictiveBackProgress: Float,
+    backSwipeEdge: Int,
+    onResetBackProgress: suspend () -> Unit,
+    onRequestClose: () -> Unit,
+    onRemoved: () -> Unit,
+    onMediaClick: (MediaCardItem, Rect?) -> Unit
+) {
+    val density = LocalDensity.current
+    val animProgress = remember(overlay.id) { Animatable(0f) }
+    val closing by overlay.isClosing
+    val originBounds = (overlay as? AppOverlay.Meta)?.originBounds
+
+    // Open animation: runs ONCE per overlay instance when pushed
+    LaunchedEffect(overlay.id) {
+        onResetBackProgress()
+        animProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(
+                durationMillis = if (originBounds != null) 310 else 250,
+                easing = FastOutSlowInEasing
+            )
+        )
+    }
+
+    // Close animation: smoothly shrinks back into origin card (or reverses slide) and removes only this overlay
+    LaunchedEffect(closing) {
+        if (closing) {
+            animProgress.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(
+                    durationMillis = if (originBounds != null) 260 else 210,
+                    easing = FastOutSlowInEasing
+                )
+            )
+            onResetBackProgress()
+            onRemoved()
+        }
+    }
+
+    val p = animProgress.value
+    val bp = if (isTop && !closing) predictiveBackProgress else 0f
+
+    // Dim scrim behind this overlay (only visible for the top overlay to avoid stacking dark scrims)
+    if (isTop) {
+        val scrimAlpha = (0.50f * p * (1f - bp * 0.55f)).coerceIn(0f, 0.50f)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(ComposeColor.Black.copy(alpha = scrimAlpha))
+        )
+    }
+
+    val hasValidCardOrigin = originBounds != null &&
+        originBounds.width > 16f &&
+        originBounds.height > 16f &&
+        originBounds.right > 0f &&
+        originBounds.bottom > 0f &&
+        originBounds.left < rootWidthPx &&
+        originBounds.top < rootHeightPx
+
+    val effectiveProgress = (p * (1f - bp * 0.35f)).coerceIn(0f, 1f)
+
+    val cornerRadius = if (hasValidCardOrigin) {
+        val cardCorner = 14f
+        if (bp > 0f) (24f * bp).dp else (cardCorner * (1f - effectiveProgress)).dp
+    } else {
+        if (bp > 0f) (28f * bp).dp else (22f * (1f - p)).dp
+    }
+    val shape = RoundedCornerShape(cornerRadius)
+
+    val layerModifier = if (hasValidCardOrigin && originBounds != null) {
+        val startScaleX = (originBounds.width / rootWidthPx).coerceIn(0.08f, 1f)
+        val startScaleY = (originBounds.height / rootHeightPx).coerceIn(0.08f, 1f)
+        val curScaleX = startScaleX + (1f - startScaleX) * effectiveProgress
+        val curScaleY = startScaleY + (1f - startScaleY) * effectiveProgress
+        val baseTx = originBounds.left * (1f - effectiveProgress)
+        val baseTy = originBounds.top * (1f - effectiveProgress)
+        val swipeShiftX = with(density) {
+            val shift = (28.dp * bp).toPx()
+            if (backSwipeEdge == BackEventCompat.EDGE_RIGHT) -shift else shift
+        }
+
+        Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                transformOrigin = TransformOrigin(0f, 0f)
+                scaleX = curScaleX
+                scaleY = curScaleY
+                translationX = baseTx + swipeShiftX
+                translationY = baseTy
+                alpha = (0.35f + 0.65f * (p * 1.6f).coerceIn(0f, 1f)).coerceIn(0f, 1f)
+            }
+    } else {
+        val enterScale = 0.94f + (0.06f * p)
+        val enterTranslateY = with(density) { (36.dp * (1f - p)).toPx() }
+        val backScale = 1f - (0.14f * bp)
+        val backTranslateX = with(density) {
+            val shift = (44.dp * bp).toPx()
+            if (backSwipeEdge == BackEventCompat.EDGE_RIGHT) -shift else shift
+        }
+        Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                scaleX = enterScale * backScale
+                scaleY = enterScale * backScale
+                translationX = backTranslateX
+                translationY = enterTranslateY
+                alpha = (0.35f + 0.65f * p).coerceIn(0f, 1f)
+            }
+    }
+
+    Box(
+        modifier = layerModifier
+            .shadow(
+                elevation = if (bp > 0f || p < 0.99f) 22.dp else 0.dp,
+                shape = shape,
+                clip = false
+            )
+            .clip(shape)
+            .background(AppColors.Background)
+    ) {
+        RenderOverlayScreen(
+            overlay = overlay,
+            onBack = onRequestClose,
+            onMediaClick = onMediaClick
+        )
+    }
+}
+
+@Composable
 private fun RenderOverlayScreen(
     overlay: AppOverlay,
     onBack: () -> Unit,
-    onMediaClick: (MediaCardItem) -> Unit
+    onMediaClick: (MediaCardItem, Rect?) -> Unit
 ) {
     when (overlay) {
-        is AppOverlay.Providers -> ProvidersScreen(onBack = onBack)
         is AppOverlay.SeeAll -> SeeAllScreen(
             source = overlay.source,
             onBack = onBack,

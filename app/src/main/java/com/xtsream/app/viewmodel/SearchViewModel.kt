@@ -54,14 +54,20 @@ data class SearchFilters(
             if (!matchType) return false
         }
         if (minRating != null) {
-            val parsed = item.score?.toDoubleOrNull() ?: return false
-            if (parsed < minRating) return false
+            val parsed = item.score?.toDoubleOrNull()
+            // Only filter items that actually have a rating; items without a rating stay visible
+            if (parsed != null && parsed < minRating) return false
         }
-        when (dubFilter) {
-            SearchDubFilter.All -> Unit
-            SearchDubFilter.Sub -> if (!item.hasSub) return false
-            SearchDubFilter.Dub -> if (!item.hasDub) return false
-            SearchDubFilter.Both -> if (!(item.hasSub && item.hasDub)) return false
+        if (dubFilter != SearchDubFilter.All) {
+            // Only apply sub/dub filter to items that declare sub or dub metadata; others always remain visible
+            if (item.hasSub || item.hasDub) {
+                when (dubFilter) {
+                    SearchDubFilter.All -> Unit
+                    SearchDubFilter.Sub -> if (!item.hasSub) return false
+                    SearchDubFilter.Dub -> if (!item.hasDub) return false
+                    SearchDubFilter.Both -> if (!(item.hasSub && item.hasDub)) return false
+                }
+            }
         }
         return true
     }
@@ -271,7 +277,7 @@ class SearchViewModel : ViewModel() {
                     query = q,
                     hasSearched = true,
                     isSearching = false,
-                    errorMessage = "No providers installed. Add a CloudStream repository in Settings → Providers."
+                    errorMessage = "No providers installed. Add a CloudStream or Stremio provider in the Providers tab."
                 )
             }
             return

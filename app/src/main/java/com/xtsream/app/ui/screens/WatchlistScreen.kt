@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -28,7 +29,7 @@ import com.xtsream.app.ui.theme.AppColors
 
 @Composable
 fun WatchlistScreen(
-    onMediaClick: (MediaCardItem) -> Unit
+    onMediaClick: (MediaCardItem, Rect?) -> Unit
 ) {
     val watchlist by WatchlistStore.watchlist.collectAsState()
     val recentViewed by WatchlistStore.recentlyViewed.collectAsState()
@@ -109,7 +110,7 @@ fun WatchlistScreen(
                         PosterCard(
                             item = item,
                             modifier = Modifier.fillMaxWidth(),
-                            onClick = { onMediaClick(item) }
+                            onClick = { bounds -> onMediaClick(item, bounds) }
                         )
                     }
                 }
@@ -137,7 +138,7 @@ fun WatchlistScreen(
                     items(recentViewed, key = { "${it.apiKey}_${it.url}" }) { item ->
                         MediaListRowCard(
                             item = item,
-                            onClick = { onMediaClick(item) },
+                            onClick = { onMediaClick(item, null) },
                             trailingContent = {
                                 if (watchlist.any { it.url == item.url }) {
                                     IconButton(

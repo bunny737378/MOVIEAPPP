@@ -18,9 +18,15 @@ import com.lagradost.cloudstream3.plugins.PluginManager
 import com.lagradost.cloudstream3.plugins.Repository
 import com.lagradost.cloudstream3.plugins.RepositoryManager
 import com.lagradost.cloudstream3.plugins.SitePlugin
+import com.lagradost.cloudstream3.syncproviders.AccountManager
 import com.lagradost.cloudstream3.ui.settings.extensions.RepositoryData
 import com.lagradost.cloudstream3.utils.AppUtils
+import com.xtsream.app.stremio.StremioAddonRecord
+import com.xtsream.app.stremio.StremioMainApiAdapter
+import com.xtsream.app.stremio.StremioRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -30,6 +36,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -49,7 +56,9 @@ data class ProviderEntry(
     val api: MainAPI,
     val sourceLabel: String,
     val displayName: String,
-    val isDuplicateName: Boolean
+    val isDuplicateName: Boolean,
+    val isStremio: Boolean = false,
+    val iconUrl: String? = null
 )
 
 sealed class AddSourceResult {
@@ -71,7 +80,9 @@ sealed class AddSourceResult {
 data class InstalledExtensionInfo(
     val pluginData: PluginData,
     val sourceLabel: String,
-    val providedEntries: List<ProviderEntry>
+    val providedEntries: List<ProviderEntry>,
+    val iconUrl: String? = null,
+    val cachedIconPath: String? = null
 )
 
 object ExtensionController {
@@ -114,6 +125,16 @@ object ExtensionController {
     private val _installingKeys = MutableStateFlow<Set<String>>(emptySet())
     val installingKeys: StateFlow<Set<String>> = _installingKeys.asStateFlow()
 
+    private val _isPreloadingRepos = MutableStateFlow(false)
+    val isPreloadingRepos: StateFlow<Boolean> = _isPreloadingRepos.asStateFlow()
+
+    val stremioAddons: StateFlow<List<StremioAddonRecord>>
+        get() = StremioRepository.addons
+
+    private val bgScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val stremioAdapters = mutableMapOf<String, StremioMainApiAdapter>()
+    private val preloadMutex = Mutex()
+
     fun providerKeyOf(api: MainAPI): String = "${api.sourcePlugin ?: "builtin"}::${api.name}"
 
     suspend fun initialize(context: Context) = initMutex.withLock {
@@ -122,6 +143,8 @@ object ExtensionController {
             return@withLock
         }
         _isBooting.value = true
+        runCatching { AccountManager.initMainAPI() }
+        runCatching { StremioRepository.init(context.applicationContext) }
         RepositoryManager.onRepositoriesChanged = {
             refreshRuntimeState()
         }
@@ -186,6 +209,7 @@ object ExtensionController {
     }
 
     fun refreshRuntimeState() {
+        val ctx = CloudStreamApp.context
         val repos = RepositoryManager.getRepositories().toList()
         _repositories.value = repos
 
@@ -194,26 +218,65 @@ object ExtensionController {
         val allPluginRecords = (online + local).distinctBy { it.filePath }
         val pluginByPath = allPluginRecords.associateBy { it.filePath }
 
-        // Keep ALL distinct (sourcePlugin + api.name) providers — do NOT drop duplicate names from different repos!
-        val allApis = APIHolder.allProviders.withLock {
+        // Build fast lookup of SitePlugin icons from loaded repos so installed plugins always recover icons
+        val allRepoSitePlugins = _repoPlugins.value.values.flatten()
+        val iconByUrl = mutableMapOf<String, String>()
+        val iconByInternalName = mutableMapOf<String, String>()
+        allRepoSitePlugins.forEach { sp ->
+            val icon = sp.iconUrl?.trim()?.takeIf { it.isNotBlank() } ?: return@forEach
+            val norm = normalizePluginUrl(sp.url)
+            if (norm.isNotBlank()) iconByUrl.putIfAbsent(norm, icon)
+            if (sp.internalName.isNotBlank()) iconByInternalName.putIfAbsent(sp.internalName.lowercase(), icon)
+        }
+
+        // Sync Stremio MainAPI adapters for all enabled discovery-capable Stremio addons
+        val enabledStremio = StremioRepository.getEnabledAddons().filter { it.manifest.isDiscoveryCapable() }
+        val activeStremioKeys = enabledStremio.map { "${it.manifestUrl}#${it.manifest.version}" }.toSet()
+        synchronized(stremioAdapters) {
+            stremioAdapters.keys.retainAll(activeStremioKeys)
+        }
+        val stremioApiPairs = enabledStremio.map { addon ->
+            val cacheKey = "${addon.manifestUrl}#${addon.manifest.version}"
+            val adapter = synchronized(stremioAdapters) {
+                stremioAdapters.getOrPut(cacheKey) { StremioMainApiAdapter(addon) }
+            }
+            adapter to addon
+        }
+
+        // Keep ALL distinct (sourcePlugin + api.name) CloudStream providers + enabled Stremio providers
+        val csApis = APIHolder.allProviders.withLock {
             APIHolder.allProviders.toList()
         }.distinctBy { providerKeyOf(it) }
 
-        val nameCounts = allApis.groupingBy { it.name.lowercase() }.eachCount()
+        val combinedApis: List<Triple<MainAPI, Boolean, StremioAddonRecord?>> =
+            csApis.map { Triple(it, false, null) } +
+                stremioApiPairs.map { (adapter, addon) -> Triple(adapter, true, addon) }
 
-        // Disambiguate ONLY when two or more providers share the exact same name
-        val rawEntries = allApis.map { api ->
+        val nameCounts = combinedApis.groupingBy { it.first.name.lowercase() }.eachCount()
+
+        val rawEntries = combinedApis.map { (api, isStremio, stremioAddon) ->
             val key = providerKeyOf(api)
             val pData = api.sourcePlugin?.let { pluginByPath[it] }
-            val sourceLabel = resolveSourceLabelForFile(api.sourcePlugin, pData?.url, repos)
+            val sourceLabel = if (isStremio) {
+                "Stremio"
+            } else {
+                resolveSourceLabelForFile(api.sourcePlugin, pData?.url, repos)
+            }
+            val iconUrl = if (isStremio) {
+                stremioAddon?.manifest?.logo
+            } else {
+                pData?.iconUrl?.takeIf { it.isNotBlank() }
+                    ?: pData?.url?.let { iconByUrl[normalizePluginUrl(it)] }
+                    ?: pData?.internalName?.lowercase()?.let { iconByInternalName[it] }
+            }
             val isDup = (nameCounts[api.name.lowercase()] ?: 0) > 1
-            Triple(key, api, sourceLabel to isDup)
+            Triple(key, api, Triple(sourceLabel, isDup, isStremio to iconUrl))
         }
 
-        // Ensure even two direct installs from the same host (different URLs) get numbered distinctly
         val labelDuplicateTracker = mutableMapOf<String, Int>()
         val entries = rawEntries.map { (key, api, meta) ->
-            val (baseSource, isDup) = meta
+            val (baseSource, isDup, stremioMeta) = meta
+            val (isStremio, iconUrl) = stremioMeta
             val displayName = if (!isDup) {
                 api.name
             } else {
@@ -228,7 +291,9 @@ object ExtensionController {
                 api = api,
                 sourceLabel = baseSource,
                 displayName = displayName,
-                isDuplicateName = isDup
+                isDuplicateName = isDup,
+                isStremio = isStremio,
+                iconUrl = iconUrl
             )
         }.sortedBy { it.displayName.lowercase() }
 
@@ -236,9 +301,39 @@ object ExtensionController {
         _loadedApis.value = entries.map { it.api }
 
         val installedList = allPluginRecords.map { pData ->
-            val provided = entries.filter { it.api.sourcePlugin == pData.filePath }
+            val provided = entries.filter { !it.isStremio && it.api.sourcePlugin == pData.filePath }
             val sourceLabel = resolveSourceLabelForFile(pData.filePath, pData.url, repos)
-            InstalledExtensionInfo(pData, sourceLabel, provided)
+            val resolvedIcon = pData.iconUrl?.takeIf { it.isNotBlank() }
+                ?: pData.url?.let { iconByUrl[normalizePluginUrl(it)] }
+                ?: iconByInternalName[pData.internalName.lowercase()]
+                ?: provided.firstNotNullOfOrNull { iconByInternalName[it.api.name.lowercase()] }
+            val cachedFile = if (ctx != null && !resolvedIcon.isNullOrBlank()) {
+                PluginIconCache.getCachedIconFile(ctx, resolvedIcon)
+            } else null
+
+            // Trigger background icon caching if we know the icon URL but it's not cached locally yet
+            if (ctx != null && !resolvedIcon.isNullOrBlank() && cachedFile == null) {
+                bgScope.launch {
+                    val saved = PluginIconCache.cacheIcon(ctx, resolvedIcon)
+                    if (saved != null) {
+                        _installedPlugins.update { list ->
+                            list.map { item ->
+                                if (item.pluginData.filePath == pData.filePath && item.cachedIconPath == null) {
+                                    item.copy(iconUrl = resolvedIcon, cachedIconPath = saved.absolutePath)
+                                } else item
+                            }
+                        }
+                    }
+                }
+            }
+
+            InstalledExtensionInfo(
+                pluginData = pData,
+                sourceLabel = sourceLabel,
+                providedEntries = provided,
+                iconUrl = resolvedIcon,
+                cachedIconPath = cachedFile?.absolutePath
+            )
         }
         _installedPlugins.value = installedList
 
@@ -876,6 +971,12 @@ object ExtensionController {
                 expectedFileHash = plugin.fileHash
             ) ?: return@withContext Result.failure(IllegalStateException("Download failed for ${plugin.name}"))
 
+            // Cache extension icon locally right on install
+            val iconUrl = plugin.iconUrl?.trim()?.takeIf { it.isNotBlank() }
+            if (iconUrl != null) {
+                bgScope.launch { PluginIconCache.cacheIcon(context.applicationContext, iconUrl) }
+            }
+
             val loaded = PluginManager.loadPlugin(
                 context = context.applicationContext,
                 file = downloaded,
@@ -884,7 +985,8 @@ object ExtensionController {
                     url = plugin.url,
                     isOnline = true,
                     filePath = downloaded.absolutePath,
-                    version = if (plugin.version > 0) plugin.version else PLUGIN_VERSION_NOT_SET
+                    version = if (plugin.version > 0) plugin.version else PLUGIN_VERSION_NOT_SET,
+                    iconUrl = iconUrl
                 )
             )
 
@@ -964,6 +1066,67 @@ object ExtensionController {
             Log.e(TAG, "Remove repo failed for ${repoData.name}", t)
             Result.failure(t)
         }
+    }
+
+    /**
+     * Automatically preloads extension lists for ALL added CloudStream repositories concurrently
+     * so universal extension search across every repo works immediately.
+     */
+    suspend fun preloadAllRepositories(force: Boolean = false) = withContext(Dispatchers.IO) {
+        if (!preloadMutex.tryLock()) return@withContext
+        _isPreloadingRepos.value = true
+        try {
+            val repos = _repositories.value.ifEmpty { RepositoryManager.getRepositories().toList() }
+            val toLoad = if (force) repos else repos.filter { !_repoPlugins.value.containsKey(it.url) }
+            for (chunk in toLoad.chunked(5)) {
+                coroutineScope {
+                    chunk.map { repo ->
+                        async(Dispatchers.IO) {
+                            runCatching { loadRepositoryPlugins(repo, force = force) }
+                        }
+                    }.awaitAll()
+                }
+            }
+            // Refresh installed plugin icons once repo extension catalogs are populated
+            if (toLoad.isNotEmpty()) {
+                refreshRuntimeState()
+            }
+        } finally {
+            _isPreloadingRepos.value = false
+            preloadMutex.unlock()
+        }
+    }
+
+    suspend fun addStremioAddon(context: Context, rawUrl: String): Result<StremioAddonRecord> {
+        val res = StremioRepository.addAddon(context.applicationContext, rawUrl)
+        if (res.isSuccess) {
+            refreshRuntimeState()
+            val added = res.getOrNull()
+            if (added != null && added.manifest.isDiscoveryCapable() && _activeProvider.value == null) {
+                val entry = _loadedProviders.value.firstOrNull {
+                    it.isStremio && it.api.sourcePlugin == "stremio::${added.manifestUrl}"
+                }
+                if (entry != null) selectProvider(entry)
+            }
+        }
+        return res
+    }
+
+    suspend fun refreshStremioAddon(context: Context, manifestUrl: String): Result<StremioAddonRecord> {
+        val res = StremioRepository.refreshAddon(context.applicationContext, manifestUrl)
+        if (res.isSuccess) refreshRuntimeState()
+        return res
+    }
+
+    fun toggleStremioAddon(context: Context, manifestUrl: String): Boolean {
+        val enabled = StremioRepository.toggleEnabled(context.applicationContext, manifestUrl)
+        refreshRuntimeState()
+        return enabled
+    }
+
+    fun removeStremioAddon(context: Context, manifestUrl: String) {
+        StremioRepository.removeAddon(context.applicationContext, manifestUrl)
+        refreshRuntimeState()
     }
 
     fun clearHttpCache(context: Context): Long {

@@ -18,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,7 +38,7 @@ import com.xtsream.app.viewmodel.SeeAllViewModel
 fun SeeAllScreen(
     source: SeeAllSource,
     onBack: () -> Unit,
-    onMediaClick: (MediaCardItem) -> Unit
+    onMediaClick: (MediaCardItem, Rect?) -> Unit
 ) {
     val key = remember(source) {
         when (source) {
@@ -57,9 +58,13 @@ fun SeeAllScreen(
     }
 
     val availableTypes = remember(state.items) {
-        val dynamicTypes = state.items.mapNotNull { it.type.takeIf { t -> t.isNotBlank() } }.distinct()
-        val defaults = listOf("Movie", "Series", "Anime", "Drama", "OVA", "Cartoon")
-        (dynamicTypes + defaults).distinct()
+        state.items.mapNotNull { it.type.trim().takeIf { t -> t.isNotBlank() } }.distinct()
+    }
+    val hasAnyRating = remember(state.items) {
+        state.items.any { it.score?.toDoubleOrNull() != null }
+    }
+    val hasAnySubDub = remember(state.items) {
+        state.items.any { it.hasSub || it.hasDub }
     }
 
     Column(
@@ -162,7 +167,7 @@ fun SeeAllScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(filteredItems, key = { "${it.apiKey}_${it.url}" }) { item ->
-                    PosterCard(item = item, modifier = Modifier.fillMaxWidth(), onClick = { onMediaClick(item) })
+                    PosterCard(item = item, modifier = Modifier.fillMaxWidth(), onClick = { bounds -> onMediaClick(item, bounds) })
                 }
                 if (state.isLoadingMore) {
                     item(span = { GridItemSpan(3) }) {
@@ -190,7 +195,7 @@ fun SeeAllScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(filteredItems, key = { "${it.apiKey}_${it.url}" }) { item ->
-                    MediaListRowCard(item = item, onClick = { onMediaClick(item) })
+                    MediaListRowCard(item = item, onClick = { onMediaClick(item, null) })
                 }
                 if (state.isLoadingMore) {
                     item {
@@ -207,6 +212,8 @@ fun SeeAllScreen(
         SearchFilterBottomSheet(
             filters = state.filters,
             availableTypes = availableTypes,
+            hasAnyRating = hasAnyRating,
+            hasAnySubDub = hasAnySubDub,
             onTitleFilterChange = { vm.updateTitleFilter(it) },
             onTypeChange = { vm.updateTypeFilter(it) },
             onRatingChange = { vm.updateRatingFilter(it) },

@@ -29,6 +29,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
@@ -59,7 +60,7 @@ import com.xtsream.app.viewmodel.SearchViewModel
 @Composable
 fun SearchScreen(
     searchViewModel: SearchViewModel,
-    onMediaClick: (MediaCardItem) -> Unit,
+    onMediaClick: (MediaCardItem, Rect?) -> Unit,
     onSeeAllGroup: (ProviderSearchGroup, String) -> Unit,
     onOpenProviders: () -> Unit
 ) {
@@ -69,6 +70,12 @@ fun SearchScreen(
     val focusManager = LocalFocusManager.current
 
     var showFilterSheet by remember { mutableStateOf(false) }
+
+    // All currently loaded results across active search scope
+    val allLoadedItems = remember(state.globalGroups, state.singleProviderItems, state.selectedProviderKey) {
+        if (state.selectedProviderKey == null) state.globalGroups.flatMap { it.items }
+        else state.singleProviderItems
+    }
 
     // Apply live filters (title match, type, rating, dub status) to both global and single-provider results
     val filteredGlobalGroups = remember(state.globalGroups, state.filters) {
@@ -84,14 +91,19 @@ fun SearchScreen(
         else state.singleProviderItems.filter { state.filters.matches(it) }
     }
 
-    // Collect distinct media types from current results + common defaults for the filter sheet
-    val availableTypes = remember(state.globalGroups, state.singleProviderItems) {
-        val dynamicTypes = (state.globalGroups.flatMap { it.items } + state.singleProviderItems)
-            .mapNotNull { it.type.takeIf { t -> t.isNotBlank() } }
+    // Dynamic filters strictly derived from currently loaded search results (NO hardcoded defaults!)
+    val availableTypes = remember(allLoadedItems) {
+        allLoadedItems
+            .mapNotNull { it.type.trim().takeIf { t -> t.isNotBlank() } }
             .distinct()
-        val defaults = listOf("Movie", "Series", "Anime", "Drama", "OVA", "Cartoon")
-        (dynamicTypes + defaults).distinct()
     }
+    val hasAnyRating = remember(allLoadedItems) {
+        allLoadedItems.any { it.score?.toDoubleOrNull() != null }
+    }
+    val hasAnySubDub = remember(allLoadedItems) {
+        allLoadedItems.any { it.hasSub || it.hasDub }
+    }
+    val canShowFilterButton = allLoadedItems.isNotEmpty() || state.filters.isActive
 
     val selectedProviderDisplayName = remember(state.selectedProviderKey, loadedProviders) {
         state.selectedProviderKey?.let { key ->
@@ -169,7 +181,7 @@ fun SearchScreen(
                 }
             }
 
-            if (loadedProviders.isNotEmpty()) {
+            if (loadedProviders.isNotEmpty() && canShowFilterButton) {
                 Spacer(modifier = Modifier.width(4.dp))
                 Box {
                     IconButton(
@@ -301,7 +313,7 @@ fun SearchScreen(
                 } else if (state.selectedProviderKey != null && state.quickSuggestions.isNotEmpty()) {
                     LazyColumn(contentPadding = PaddingValues(vertical = 6.dp)) {
                         items(state.quickSuggestions, key = { "${it.apiKey}_${it.url}" }) { suggestion ->
-                            MediaListRowCard(item = suggestion, onClick = { onMediaClick(suggestion) })
+                            MediaListRowCard(item = suggestion, onClick = { onMediaClick(suggestion, null) })
                         }
                     }
                 } else if (recentSearches.isNotEmpty()) {
@@ -446,7 +458,7 @@ fun SearchScreen(
                                         PosterCard(
                                             item = item,
                                             modifier = Modifier.width(116.dp),
-                                            onClick = { onMediaClick(item) }
+                                            onClick = { bounds -> onMediaClick(item, bounds) }
                                         )
                                     }
                                 }
@@ -480,7 +492,7 @@ fun SearchScreen(
                         modifier = Modifier.fillMaxSize()
                     ) {
                         items(filteredSingleItems, key = { "${it.apiKey}_${it.url}" }) { item ->
-                            PosterCard(item = item, modifier = Modifier.fillMaxWidth(), onClick = { onMediaClick(item) })
+                            PosterCard(item = item, modifier = Modifier.fillMaxWidth(), onClick = { bounds -> onMediaClick(item, bounds) })
                         }
                         if (state.isLoadingMore) {
                             item(span = { GridItemSpan(3) }) {
@@ -508,7 +520,7 @@ fun SearchScreen(
                         modifier = Modifier.fillMaxSize()
                     ) {
                         items(filteredSingleItems, key = { "${it.apiKey}_${it.url}" }) { item ->
-                            MediaListRowCard(item = item, onClick = { onMediaClick(item) })
+                            MediaListRowCard(item = item, onClick = { onMediaClick(item, null) })
                         }
                         if (state.isLoadingMore) {
                             item {
@@ -527,6 +539,8 @@ fun SearchScreen(
         SearchFilterBottomSheet(
             filters = state.filters,
             availableTypes = availableTypes,
+            hasAnyRating = hasAnyRating,
+            hasAnySubDub = hasAnySubDub,
             onTitleFilterChange = { searchViewModel.updateTitleFilter(it) },
             onTypeChange = { searchViewModel.updateTypeFilter(it) },
             onRatingChange = { searchViewModel.updateRatingFilter(it) },
@@ -688,6 +702,8 @@ fun NoFilterMatchesView(onReset: () -> Unit) {
 fun SearchFilterBottomSheet(
     filters: SearchFilters,
     availableTypes: List<String>,
+    hasAnyRating: Boolean,
+    hasAnySubDub: Boolean,
     onTitleFilterChange: (String) -> Unit,
     onTypeChange: (String?) -> Unit,
     onRatingChange: (Double?) -> Unit,
@@ -769,91 +785,110 @@ fun SearchFilterBottomSheet(
                 }
             }
 
-            // 2. Type Filter
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "TYPE",
-                    color = AppColors.TextMuted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.8.sp
-                )
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    item(key = "type_all") {
-                        FilterOptionChip(
-                            label = "All",
-                            selected = filters.selectedType == null,
-                            onClick = { onTypeChange(null) }
-                        )
-                    }
-                    items(availableTypes, key = { "type_$it" }) { type ->
-                        FilterOptionChip(
-                            label = type,
-                            selected = filters.selectedType.equals(type, ignoreCase = true),
-                            onClick = { onTypeChange(if (filters.selectedType == type) null else type) }
-                        )
-                    }
+            // 2. Dynamic Type Filter (strictly derived from loaded results)
+            if (availableTypes.isNotEmpty() || filters.selectedType != null) {
+                val displayTypes = remember(availableTypes, filters.selectedType) {
+                    (availableTypes + listOfNotNull(filters.selectedType)).distinct()
                 }
-            }
-
-            // 3. Rating Filter
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "MINIMUM RATING",
-                    color = AppColors.TextMuted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.8.sp
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val ratingOptions = listOf<Double?>(null, 6.0, 7.0, 8.0, 9.0)
-                    ratingOptions.forEach { min ->
-                        val selected = filters.minRating == min
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (selected) AppColors.Primary else AppColors.SurfaceCard)
-                                .clickable { onRatingChange(min) }
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (min != null) {
-                                Icon(
-                                    imageVector = Icons.Filled.Star,
-                                    contentDescription = null,
-                                    tint = if (selected) AppColors.OnPrimary else AppColors.Gold,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                                Spacer(modifier = Modifier.width(3.dp))
-                            }
-                            Text(
-                                text = if (min == null) "Any" else "${min.toInt()}+",
-                                color = if (selected) AppColors.OnPrimary else AppColors.TextPrimary,
-                                fontSize = 12.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "TYPE",
+                        color = AppColors.TextMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.8.sp
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item(key = "type_all") {
+                            FilterOptionChip(
+                                label = "All",
+                                selected = filters.selectedType == null,
+                                onClick = { onTypeChange(null) }
+                            )
+                        }
+                        items(displayTypes, key = { "type_$it" }) { type ->
+                            FilterOptionChip(
+                                label = type,
+                                selected = filters.selectedType.equals(type, ignoreCase = true),
+                                onClick = { onTypeChange(if (filters.selectedType == type) null else type) }
                             )
                         }
                     }
                 }
             }
 
-            // 4. Dub Status Filter
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "DUB STATUS",
-                    color = AppColors.TextMuted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.8.sp
-                )
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(SearchDubFilter.entries, key = { it.name }) { opt ->
-                        FilterOptionChip(
-                            label = opt.label,
-                            selected = filters.dubFilter == opt,
-                            onClick = { onDubChange(opt) }
-                        )
+            // 3. Dynamic Rating Filter (only shown when results contain ratings; never hides unrated items)
+            if (hasAnyRating || filters.minRating != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "MINIMUM RATING",
+                        color = AppColors.TextMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.8.sp
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val ratingOptions = listOf<Double?>(null, 6.0, 7.0, 8.0, 9.0)
+                        ratingOptions.forEach { min ->
+                            val selected = filters.minRating == min
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (selected) AppColors.Primary else AppColors.SurfaceCard)
+                                    .clickable { onRatingChange(min) }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (min != null) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Star,
+                                        contentDescription = null,
+                                        tint = if (selected) AppColors.OnPrimary else AppColors.Gold,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                }
+                                Text(
+                                    text = if (min == null) "Any" else "${min.toInt()}+",
+                                    color = if (selected) AppColors.OnPrimary else AppColors.TextPrimary,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                )
+                            }
+                        }
                     }
+                    Text(
+                        text = "Applies only to rated titles; unrated titles stay visible.",
+                        color = AppColors.TextMuted,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+
+            // 4. Dynamic Sub/Dub Filter (only shown when results contain sub/dub info; never hides untagged items)
+            if (hasAnySubDub || filters.dubFilter != SearchDubFilter.All) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "SUB / DUB",
+                        color = AppColors.TextMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.8.sp
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(SearchDubFilter.entries, key = { it.name }) { opt ->
+                            FilterOptionChip(
+                                label = opt.label,
+                                selected = filters.dubFilter == opt,
+                                onClick = { onDubChange(opt) }
+                            )
+                        }
+                    }
+                    Text(
+                        text = "Applies only to titles with sub/dub tags; others stay visible.",
+                        color = AppColors.TextMuted,
+                        fontSize = 11.sp
+                    )
                 }
             }
 
