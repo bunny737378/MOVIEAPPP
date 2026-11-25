@@ -44,6 +44,7 @@ data class SeeAllUiState(
     val title: String = "",
     val subtitle: String = "",
     val items: List<MediaCardItem> = emptyList(),
+    val filters: SearchFilters = SearchFilters(),
     val isLoadingMore: Boolean = false,
     val hasMore: Boolean = false,
     val isGridView: Boolean = true,
@@ -97,6 +98,26 @@ class SeeAllViewModel : ViewModel() {
 
     fun toggleLayoutMode() {
         _uiState.update { it.copy(isGridView = !it.isGridView) }
+    }
+
+    fun updateTitleFilter(text: String) {
+        _uiState.update { it.copy(filters = it.filters.copy(titleContains = text)) }
+    }
+
+    fun updateTypeFilter(type: String?) {
+        _uiState.update { it.copy(filters = it.filters.copy(selectedType = type)) }
+    }
+
+    fun updateRatingFilter(minRating: Double?) {
+        _uiState.update { it.copy(filters = it.filters.copy(minRating = minRating)) }
+    }
+
+    fun updateDubFilter(dubFilter: SearchDubFilter) {
+        _uiState.update { it.copy(filters = it.filters.copy(dubFilter = dubFilter)) }
+    }
+
+    fun resetFilters() {
+        _uiState.update { it.copy(filters = SearchFilters()) }
     }
 
     fun loadMore() {

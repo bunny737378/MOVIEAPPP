@@ -240,64 +240,65 @@ fun SearchScreen(
         HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
 
         // Active Filter Summary Bar (only shown when at least one filter is active)
-        AnimatedVisibility(visible = state.filters.isActive) {
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(AppColors.Surface)
-            ) {
-                if (state.filters.titleContains.isNotBlank()) {
-                    item(key = "af_name") {
-                        ActiveFilterTag(
-                            label = "Name: \"${state.filters.titleContains}\"",
-                            onClear = { searchViewModel.updateTitleFilter("") }
-                        )
-                    }
-                }
-                state.filters.selectedType?.let { type ->
-                    item(key = "af_type") {
-                        ActiveFilterTag(
-                            label = type,
-                            onClear = { searchViewModel.updateTypeFilter(null) }
-                        )
-                    }
-                }
-                state.filters.minRating?.let { rating ->
-                    item(key = "af_rating") {
-                        ActiveFilterTag(
-                            label = "★ ${rating.toInt()}+",
-                            onClear = { searchViewModel.updateRatingFilter(null) }
-                        )
-                    }
-                }
-                if (state.filters.dubFilter != SearchDubFilter.All) {
-                    item(key = "af_dub") {
-                        ActiveFilterTag(
-                            label = state.filters.dubFilter.label,
-                            onClear = { searchViewModel.updateDubFilter(SearchDubFilter.All) }
-                        )
-                    }
-                }
-                item(key = "af_reset") {
-                    Text(
-                        text = "Reset",
-                        color = AppColors.TextSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clickable { searchViewModel.resetFilters() }
-                            .padding(horizontal = 6.dp, vertical = 4.dp)
-                    )
-                }
-            }
-        }
+        ActiveFilterSummaryBar(
+            filters = state.filters,
+            onClearTitle = { searchViewModel.updateTitleFilter("") },
+            onClearType = { searchViewModel.updateTypeFilter(null) },
+            onClearRating = { searchViewModel.updateRatingFilter(null) },
+            onClearDub = { searchViewModel.updateDubFilter(SearchDubFilter.All) },
+            onReset = { searchViewModel.resetFilters() }
+        )
 
         when {
             !state.hasSearched -> {
-                if (state.quickSuggestions.isNotEmpty()) {
+                if (state.selectedProviderKey == null && state.tmdbSuggestions.isNotEmpty()) {
+                    LazyColumn(contentPadding = PaddingValues(vertical = 6.dp)) {
+                        items(state.tmdbSuggestions, key = { "${it.mediaType}_${it.title}_${it.year}" }) { suggestion ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        focusManager.clearFocus()
+                                        searchViewModel.executeSearch(suggestion.title)
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Search,
+                                    contentDescription = null,
+                                    tint = AppColors.TextMuted,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(14.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = suggestion.title,
+                                        color = AppColors.TextPrimary,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    val sub = listOfNotNull(
+                                        if (suggestion.mediaType == "tv") "Series" else "Movie",
+                                        suggestion.year
+                                    ).joinToString(" • ")
+                                    Text(
+                                        text = sub,
+                                        color = AppColors.TextMuted,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                            HorizontalDivider(
+                                modifier = Modifier.padding(start = 48.dp, end = 16.dp),
+                                thickness = 0.5.dp,
+                                color = AppColors.Divider
+                            )
+                        }
+                    }
+                } else if (state.selectedProviderKey != null && state.quickSuggestions.isNotEmpty()) {
                     LazyColumn(contentPadding = PaddingValues(vertical = 6.dp)) {
                         items(state.quickSuggestions, key = { "${it.apiKey}_${it.url}" }) { suggestion ->
                             MediaListRowCard(item = suggestion, onClick = { onMediaClick(suggestion) })
@@ -567,6 +568,71 @@ private fun ProviderScopeTab(
 }
 
 @Composable
+fun ActiveFilterSummaryBar(
+    filters: SearchFilters,
+    onClearTitle: () -> Unit,
+    onClearType: () -> Unit,
+    onClearRating: () -> Unit,
+    onClearDub: () -> Unit,
+    onReset: () -> Unit
+) {
+    AnimatedVisibility(visible = filters.isActive) {
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(AppColors.Surface)
+        ) {
+            if (filters.titleContains.isNotBlank()) {
+                item(key = "af_name") {
+                    ActiveFilterTag(
+                        label = "Name: \"${filters.titleContains}\"",
+                        onClear = onClearTitle
+                    )
+                }
+            }
+            filters.selectedType?.let { type ->
+                item(key = "af_type") {
+                    ActiveFilterTag(
+                        label = type,
+                        onClear = onClearType
+                    )
+                }
+            }
+            filters.minRating?.let { rating ->
+                item(key = "af_rating") {
+                    ActiveFilterTag(
+                        label = "★ ${rating.toInt()}+",
+                        onClear = onClearRating
+                    )
+                }
+            }
+            if (filters.dubFilter != SearchDubFilter.All) {
+                item(key = "af_dub") {
+                    ActiveFilterTag(
+                        label = filters.dubFilter.label,
+                        onClear = onClearDub
+                    )
+                }
+            }
+            item(key = "af_reset") {
+                Text(
+                    text = "Reset",
+                    color = AppColors.TextSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clickable { onReset() }
+                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun ActiveFilterTag(
     label: String,
     onClear: () -> Unit
@@ -591,7 +657,7 @@ private fun ActiveFilterTag(
 }
 
 @Composable
-private fun NoFilterMatchesView(onReset: () -> Unit) {
+fun NoFilterMatchesView(onReset: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -619,7 +685,7 @@ private fun NoFilterMatchesView(onReset: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SearchFilterBottomSheet(
+fun SearchFilterBottomSheet(
     filters: SearchFilters,
     availableTypes: List<String>,
     onTitleFilterChange: (String) -> Unit,

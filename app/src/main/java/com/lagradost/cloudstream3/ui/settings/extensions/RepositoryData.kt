@@ -12,4 +12,10 @@ data class RepositoryData(
     @JsonProperty("name") @SerialName("name") val name: String,
     @JsonProperty("url") @SerialName("url") val url: String,
     @JsonProperty("description") @SerialName("description") val description: String? = null,
-)
+) {
+    /**
+     * Exact 3-argument constructor matching upstream CloudStream3 `RepositoryData(iconUrl, name, url)`.
+     * Required by meta-repo plugins like MegaProvider.cs3 which link directly against `(String, String, String)V`.
+     */
+    constructor(iconUrl: String?, name: String, url: String) : this(iconUrl, name, url, null)
+}

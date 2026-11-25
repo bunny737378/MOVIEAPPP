@@ -1,5 +1,12 @@
 package com.xtsream.app.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -7,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -24,9 +32,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -57,6 +69,8 @@ import kotlinx.coroutines.delay
 @Composable
 fun HomeScreen(
     homeViewModel: HomeViewModel,
+    barsVisible: Boolean = true,
+    onBarsVisibilityChange: (Boolean) -> Unit = {},
     onMediaClick: (MediaCardItem) -> Unit,
     onSeeAllSection: (HomeSection) -> Unit,
     onOpenProviders: () -> Unit,
@@ -69,8 +83,71 @@ fun HomeScreen(
     val watchlist by WatchlistStore.watchlist.collectAsState()
 
     var showProviderPicker by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
 
     val hasHero = !isBooting && loadedProviders.isNotEmpty() && !state.isLoading && state.featuredItems.isNotEmpty()
+
+    val isAtTop by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 36
+        }
+    }
+
+    val isScrolledPastHero by remember(hasHero) {
+        derivedStateOf {
+            if (!hasHero) true
+            else listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 300
+        }
+    }
+
+    LaunchedEffect(isAtTop) {
+        if (isAtTop) onBarsVisibilityChange(true)
+    }
+
+    LaunchedEffect(activeProvider?.key) {
+        onBarsVisibilityChange(true)
+    }
+
+    val barsVisibleState by rememberUpdatedState(barsVisible)
+    val onBarsChangeState by rememberUpdatedState(onBarsVisibilityChange)
+
+    val scrollConnection = remember {
+        object : NestedScrollConnection {
+            private var accumulated = 0f
+
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val dy = available.y
+                if (kotlin.math.abs(dy) < 0.5f) return Offset.Zero
+
+                if (dy < 0f) {
+                    // Scrolling down -> hide both top bar & bottom nav bar
+                    if (accumulated > 0f) accumulated = 0f
+                    accumulated += dy
+                    if (accumulated < -30f && barsVisibleState &&
+                        (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 64)
+                    ) {
+                        onBarsChangeState(false)
+                        accumulated = 0f
+                    }
+                } else {
+                    // Scrolling up slightly -> restore both bars
+                    if (accumulated < 0f) accumulated = 0f
+                    accumulated += dy
+                    if (accumulated > 14f && !barsVisibleState) {
+                        onBarsChangeState(true)
+                        accumulated = 0f
+                    }
+                }
+                return Offset.Zero
+            }
+        }
+    }
+
+    val solidHeaderBg by animateColorAsState(
+        targetValue = if (isScrolledPastHero) AppColors.NavBarBg else Color.Transparent,
+        animationSpec = tween(durationMillis = 220),
+        label = "home_header_bg"
+    )
 
     Box(
         modifier = Modifier
@@ -125,11 +202,14 @@ fun HomeScreen(
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .nestedScroll(scrollConnection)
                 ) {
                     LazyColumn(
+                        state = listState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 28.dp),
+                        contentPadding = PaddingValues(bottom = 92.dp),
                         verticalArrangement = Arrangement.spacedBy(24.dp)
                     ) {
                         if (state.featuredItems.isNotEmpty()) {
@@ -164,64 +244,79 @@ fun HomeScreen(
             }
         }
 
-        // Clean overlay top bar (transparent over hero scrim, charcoal otherwise)
+        // Auto-hiding Top Bar — transparent gradient over top hero, smoothly solid AppColors.NavBarBg when scrolled past hero
         if (loadedProviders.isNotEmpty()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        if (hasHero) {
-                            Brush.verticalGradient(
-                                listOf(AppColors.Background.copy(alpha = 0.78f), Color.Transparent)
-                            )
-                        } else {
-                            Brush.verticalGradient(listOf(AppColors.Background, AppColors.Background))
-                        }
-                    )
-                    .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
+            AnimatedVisibility(
+                visible = barsVisible,
+                enter = slideInVertically(initialOffsetY = { -it }, animationSpec = tween(200)) + fadeIn(tween(180)),
+                exit = slideOutVertically(targetOffsetY = { -it }, animationSpec = tween(200)) + fadeOut(tween(160)),
+                modifier = Modifier.align(Alignment.TopCenter)
             ) {
-                Row(
+                Column(
                     modifier = Modifier
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) { showProviderPicker = true }
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .fillMaxWidth()
+                        .background(
+                            if (isScrolledPastHero) {
+                                Brush.verticalGradient(listOf(solidHeaderBg, solidHeaderBg))
+                            } else {
+                                Brush.verticalGradient(
+                                    listOf(AppColors.Background.copy(alpha = 0.78f), Color.Transparent)
+                                )
+                            }
+                        )
                 ) {
-                    Text(
-                        text = activeProvider?.displayName ?: "Select Provider",
-                        color = AppColors.Primary,
-                        fontSize = 19.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 240.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Icon(
-                        imageVector = Icons.Filled.KeyboardArrowDown,
-                        contentDescription = "Switch provider",
-                        tint = AppColors.TextSecondary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { showProviderPicker = true }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = activeProvider?.displayName ?: "Select Provider",
+                                color = AppColors.Primary,
+                                fontSize = 19.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = 240.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.Filled.KeyboardArrowDown,
+                                contentDescription = "Switch provider",
+                                tint = AppColors.TextSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
 
-                Spacer(modifier = Modifier.weight(1f))
+                        Spacer(modifier = Modifier.weight(1f))
 
-                // Top-right Search icon scoped directly to the active Home provider
-                IconButton(
-                    onClick = { activeProvider?.let { onSearchActiveProvider(it) } },
-                    modifier = Modifier.size(38.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Search,
-                        contentDescription = "Search this provider",
-                        tint = AppColors.Primary,
-                        modifier = Modifier.size(22.dp)
-                    )
+                        IconButton(
+                            onClick = { activeProvider?.let { onSearchActiveProvider(it) } },
+                            modifier = Modifier.size(38.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Search,
+                                contentDescription = "Search this provider",
+                                tint = AppColors.Primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+
+                    if (isScrolledPastHero) {
+                        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
+                    }
                 }
             }
         }

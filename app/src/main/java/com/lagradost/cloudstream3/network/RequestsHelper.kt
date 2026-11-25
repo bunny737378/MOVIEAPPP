@@ -12,6 +12,7 @@ import okhttp3.ConnectionPool
 import okhttp3.Headers
 import okhttp3.Headers.Companion.toHeaders
 import okhttp3.OkHttpClient
+import okhttp3.brotli.BrotliInterceptor
 import org.conscrypt.Conscrypt
 import java.io.File
 import java.security.Security
@@ -54,9 +55,13 @@ fun buildDefaultClient(context: Context): OkHttpClient {
     return buildDefaultClient(context, false)
 }
 
+private val conscryptInstalled = java.util.concurrent.atomic.AtomicBoolean(false)
+
 /** Only use ignoreSSL if you know what you are doing */
 fun buildDefaultClient(context: Context, ignoreSSL: Boolean = false): OkHttpClient {
-    safe { Security.insertProviderAt(Conscrypt.newProvider(), 1) }
+    if (conscryptInstalled.compareAndSet(false, true)) {
+        safe { Security.insertProviderAt(Conscrypt.newProvider(), 1) }
+    }
 
     val appContext = context.applicationContext
     val settingsManager = PreferenceManager.getDefaultSharedPreferences(appContext)
@@ -70,6 +75,8 @@ fun buildDefaultClient(context: Context, ignoreSSL: Boolean = false): OkHttpClie
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
         .connectionPool(ConnectionPool(16, 2, TimeUnit.MINUTES))
+        .addInterceptor(BrotliInterceptor)
+        .addInterceptor(ExtensionCloudflareInterceptor())
         .apply {
             if (ignoreSSL) {
                 ignoreAllSSLErrors()

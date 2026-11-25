@@ -54,6 +54,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    androidResources {
+        localeFilters += listOf("en")
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -64,7 +68,13 @@ android {
                 "META-INF/LICENSE",
                 "META-INF/LICENSE.txt",
                 "META-INF/NOTICE",
-                "META-INF/NOTICE.txt"
+                "META-INF/NOTICE.txt",
+                "META-INF/AL2.0",
+                "META-INF/LGPL2.1",
+                "META-INF/androidx/**",
+                "google/protobuf/**",
+                "DebugProbesKt.bin",
+                "org/mozilla/javascript/resources/Messages_*.properties"
             )
         }
     }
@@ -92,9 +102,10 @@ dependencies {
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.androidx.preference.ktx)
     implementation(libs.androidx.annotation)
-    implementation(libs.androidx.palette)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.viewbinding)
+    implementation(libs.androidx.cardview)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
@@ -108,6 +119,7 @@ dependencies {
 
     // CloudStream .cs3 extension execution runtime & compatibility dependencies
     implementation(libs.okhttp)
+    implementation(libs.okhttp.brotli)
     implementation(libs.okhttp.dnsoverhttps)
     implementation(libs.nicehttp)
     implementation(libs.conscrypt.android)
@@ -123,6 +135,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.serialization.json.okio)
     implementation(libs.kotlinx.datetime)
     implementation(libs.kotlinx.io.core)
     implementation(libs.kotlinx.atomicfu)

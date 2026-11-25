@@ -10,12 +10,14 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -27,6 +29,7 @@ import com.xtsream.app.ui.components.M3InlineSpinner
 import com.xtsream.app.ui.components.MediaListRowCard
 import com.xtsream.app.ui.components.PosterCard
 import com.xtsream.app.ui.theme.AppColors
+import com.xtsream.app.viewmodel.SearchDubFilter
 import com.xtsream.app.viewmodel.SeeAllSource
 import com.xtsream.app.viewmodel.SeeAllViewModel
 
@@ -46,6 +49,18 @@ fun SeeAllScreen(
     LaunchedEffect(source) { vm.init(source) }
 
     val state by vm.uiState.collectAsState()
+    var showFilterSheet by remember { mutableStateOf(false) }
+
+    val filteredItems = remember(state.items, state.filters) {
+        if (!state.filters.isActive) state.items
+        else state.items.filter { state.filters.matches(it) }
+    }
+
+    val availableTypes = remember(state.items) {
+        val dynamicTypes = state.items.mapNotNull { it.type.takeIf { t -> t.isNotBlank() } }.distinct()
+        val defaults = listOf("Movie", "Series", "Anime", "Drama", "OVA", "Cartoon")
+        (dynamicTypes + defaults).distinct()
+    }
 
     Column(
         modifier = Modifier
@@ -82,6 +97,28 @@ fun SeeAllScreen(
                     )
                 }
             }
+
+            Box {
+                IconButton(onClick = { showFilterSheet = true }) {
+                    Icon(
+                        imageVector = AppIcons.Tune,
+                        contentDescription = "Filters",
+                        tint = if (state.filters.isActive) AppColors.Gold else AppColors.Primary,
+                        modifier = Modifier.size(21.dp)
+                    )
+                }
+                if (state.filters.isActive) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 10.dp, end = 10.dp)
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(AppColors.Gold)
+                    )
+                }
+            }
+
             IconButton(onClick = { vm.toggleLayoutMode() }) {
                 Icon(
                     imageVector = if (state.isGridView) AppIcons.ViewList else AppIcons.GridView,
@@ -93,7 +130,18 @@ fun SeeAllScreen(
 
         HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
 
-        if (state.isGridView) {
+        ActiveFilterSummaryBar(
+            filters = state.filters,
+            onClearTitle = { vm.updateTitleFilter("") },
+            onClearType = { vm.updateTypeFilter(null) },
+            onClearRating = { vm.updateRatingFilter(null) },
+            onClearDub = { vm.updateDubFilter(SearchDubFilter.All) },
+            onReset = { vm.resetFilters() }
+        )
+
+        if (filteredItems.isEmpty() && state.filters.isActive) {
+            NoFilterMatchesView(onReset = { vm.resetFilters() })
+        } else if (state.isGridView) {
             val gridState = rememberLazyGridState()
             val shouldLoadMore by remember {
                 derivedStateOf {
@@ -113,7 +161,7 @@ fun SeeAllScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(state.items, key = { "${it.apiKey}_${it.url}" }) { item ->
+                items(filteredItems, key = { "${it.apiKey}_${it.url}" }) { item ->
                     PosterCard(item = item, modifier = Modifier.fillMaxWidth(), onClick = { onMediaClick(item) })
                 }
                 if (state.isLoadingMore) {
@@ -141,7 +189,7 @@ fun SeeAllScreen(
                 contentPadding = PaddingValues(vertical = 8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(state.items, key = { "${it.apiKey}_${it.url}" }) { item ->
+                items(filteredItems, key = { "${it.apiKey}_${it.url}" }) { item ->
                     MediaListRowCard(item = item, onClick = { onMediaClick(item) })
                 }
                 if (state.isLoadingMore) {
@@ -153,5 +201,18 @@ fun SeeAllScreen(
                 }
             }
         }
+    }
+
+    if (showFilterSheet) {
+        SearchFilterBottomSheet(
+            filters = state.filters,
+            availableTypes = availableTypes,
+            onTitleFilterChange = { vm.updateTitleFilter(it) },
+            onTypeChange = { vm.updateTypeFilter(it) },
+            onRatingChange = { vm.updateRatingFilter(it) },
+            onDubChange = { vm.updateDubFilter(it) },
+            onReset = { vm.resetFilters() },
+            onDismiss = { showFilterSheet = false }
+        )
     }
 }

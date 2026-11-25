@@ -3,6 +3,7 @@ package com.xtsream.app.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.lagradost.cloudstream3.network.CloudflareVerifier
 import com.xtsream.app.data.MediaCardItem
 import com.xtsream.app.data.MetaUiData
 import com.xtsream.app.data.WatchlistStore
@@ -14,6 +15,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -39,7 +41,19 @@ class MetaViewModel : ViewModel() {
     private var loadJob: Job? = null
     private var loadedUrl: String? = null
     private var loadedApiKey: String? = null
+    private var lastRequestedItem: MediaCardItem? = null
     private val requestCounter = AtomicLong(0L)
+
+    init {
+        viewModelScope.launch {
+            CloudflareVerifier.verificationCompleteCounter.drop(1).collect {
+                val item = lastRequestedItem
+                if (item != null && _uiState.value.data == null && !_uiState.value.isLoading) {
+                    load(item, force = true)
+                }
+            }
+        }
+    }
 
     fun load(item: MediaCardItem, force: Boolean = false) {
         val current = _uiState.value
@@ -49,6 +63,7 @@ class MetaViewModel : ViewModel() {
             return
         }
 
+        lastRequestedItem = item
         loadedUrl = item.url
         loadedApiKey = item.apiKey
         WatchlistStore.recordViewed(item)

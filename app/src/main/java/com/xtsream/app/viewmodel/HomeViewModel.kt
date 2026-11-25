@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.lagradost.cloudstream3.MainPageData
 import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.network.CloudflareVerifier
 import com.xtsream.app.data.HomeSection
 import com.xtsream.app.data.MediaCardItem
 import com.xtsream.app.data.toMediaCardItem
@@ -19,6 +20,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -58,6 +60,13 @@ class HomeViewModel : ViewModel() {
                     loadHomePage(entry, isRefresh = false)
                 } else if (_uiState.value.providerDisplayName != entry.displayName) {
                     _uiState.update { it.copy(providerDisplayName = entry.displayName) }
+                }
+            }
+        }
+        viewModelScope.launch {
+            CloudflareVerifier.verificationCompleteCounter.drop(1).collect {
+                if (_uiState.value.sections.isEmpty() && !_uiState.value.isLoading) {
+                    retry()
                 }
             }
         }

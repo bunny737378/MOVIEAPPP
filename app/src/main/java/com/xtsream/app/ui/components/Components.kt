@@ -1,12 +1,6 @@
 package com.xtsream.app.ui.components
 
 import android.content.Context
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -15,7 +9,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -32,10 +25,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -53,10 +44,6 @@ import coil3.request.crossfade
 import com.xtsream.app.data.MediaCardItem
 import com.xtsream.app.engine.ProviderEntry
 import com.xtsream.app.ui.theme.AppColors
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.pow
-import kotlin.math.sin
 
 enum class MainTab(
     val label: String,
@@ -70,133 +57,42 @@ enum class MainTab(
 }
 
 /**
- * Material 3 Expressive Loading Indicator (Normal variant):
- * Smoothly rotating, continuously morphing rounded organic polygon sequence
- * (Soft Burst -> Rounded Clover -> Scalloped Pentagon -> Pill -> Rounded Star)
- * matching https://m3.material.io/components/loading-indicator/overview
+ * Official Material 3 Expressive LoadingIndicator (Normal / Uncontained variant).
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun M3ExpressiveLoadingIndicator(
     modifier: Modifier = Modifier,
     size: Dp = 36.dp,
     color: Color = AppColors.Primary
 ) {
-    val transition = rememberInfiniteTransition(label = "m3_loading")
-    // Continuous morph timeline across 5 signature M3 Expressive shapes
-    val morphPhase by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 5f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 3250, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "m3_morph"
+    LoadingIndicator(
+        modifier = modifier.size(size),
+        color = color
     )
-    // Gentle continuous rotation combined with springy step impulses
-    val baseRotation by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 3250, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "m3_rot"
-    )
-
-    Canvas(modifier = modifier.size(size)) {
-        val cx = this.size.width / 2f
-        val cy = this.size.height / 2f
-        val maxR = this.size.minDimension * 0.44f
-
-        val stage = morphPhase.toInt().coerceIn(0, 4)
-        val rawFrac = morphPhase - stage
-        // Expressive springy ease-in-out curve for crisp shape-holding & snappy morphs
-        val t = smoothExpressiveStep(rawFrac)
-        val nextStage = (stage + 1) % 5
-
-        val stepAngle = (stage + t) * 72f
-        val angleDeg = (baseRotation * 0.5f + stepAngle * 0.5f) % 360f
-
-        val samples = 72
-        val path = Path()
-        for (i in 0 until samples) {
-            val theta = (2.0 * PI * i) / samples
-            val r0 = m3ExpressiveShapeRadius(stage, theta)
-            val r1 = m3ExpressiveShapeRadius(nextStage, theta)
-            val r = (r0 + (r1 - r0) * t).toFloat() * maxR
-            val x = cx + (r * cos(theta)).toFloat()
-            val y = cy + (r * sin(theta)).toFloat()
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        path.close()
-
-        rotate(degrees = angleDeg, pivot = Offset(cx, cy)) {
-            drawPath(path = path, color = color)
-        }
-    }
-}
-
-private fun smoothExpressiveStep(x: Float): Float {
-    val clamped = x.coerceIn(0f, 1f)
-    // Pause briefly on each target shape, then snap smoothly into the next
-    val remapped = ((clamped - 0.12f) / 0.76f).coerceIn(0f, 1f)
-    // Cubic Hermite with slight expressive punch
-    return remapped * remapped * (3f - 2f * remapped)
 }
 
 /**
- * Polar radius r(theta) in [0.68..1.05] for Material 3 Expressive's morphing polygon sequence:
- * 0: Soft Burst (8-lobe flower)
- * 1: Clover (4-lobe quatrefoil)
- * 2: Soft Pentagon (5-lobe rounded polygon)
- * 3: Squircle / Rounded Pill (2-lobe oval)
- * 4: Scalloped Cookie (6-lobe bloom)
+ * Official Material 3 Expressive ContainedLoadingIndicator (Contained variant).
  */
-private fun m3ExpressiveShapeRadius(stage: Int, theta: Double): Double {
-    return when (stage) {
-        0 -> 0.86 + 0.14 * cos(8.0 * theta)
-        1 -> 0.80 + 0.20 * cos(4.0 * theta)
-        2 -> 0.88 + 0.11 * cos(5.0 * theta)
-        3 -> {
-            // Smooth rounded pill / oval
-            val a = 1.04
-            val b = 0.72
-            val c = cos(theta)
-            val s = sin(theta)
-            1.0 / ((c / a).pow(4) + (s / b).pow(4)).pow(0.25)
-        }
-        else -> 0.84 + 0.16 * cos(6.0 * theta)
-    }
-}
-
-/**
- * Material 3 Expressive Contained Loading Indicator (Contained variant):
- * Morphing polygon centered inside a circular tonal container.
- */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun M3ContainedLoadingIndicator(
     modifier: Modifier = Modifier,
-    containerSize: Dp = 50.dp,
+    containerSize: Dp = 48.dp,
     indicatorSize: Dp = 32.dp,
     containerColor: Color = AppColors.SurfaceElevated,
     indicatorColor: Color = AppColors.Primary
 ) {
-    Box(
-        modifier = modifier
-            .size(containerSize)
-            .clip(CircleShape)
-            .background(containerColor),
-        contentAlignment = Alignment.Center
-    ) {
-        M3ExpressiveLoadingIndicator(
-            size = indicatorSize,
-            color = indicatorColor
-        )
-    }
+    ContainedLoadingIndicator(
+        modifier = modifier.size(containerSize),
+        containerColor = containerColor,
+        indicatorColor = indicatorColor
+    )
 }
 
 /**
- * Full-screen Material 3 Contained Loading Indicator.
+ * Full-screen official Material 3 ContainedLoadingIndicator.
  */
 @Composable
 fun M3LoadingView(
@@ -211,12 +107,12 @@ fun M3LoadingView(
 }
 
 /**
- * Inline Material 3 Normal (Uncontained) Loading Indicator.
+ * Inline official Material 3 Normal (Uncontained) LoadingIndicator.
  */
 @Composable
 fun M3InlineSpinner(
     modifier: Modifier = Modifier,
-    size: Dp = 22.dp,
+    size: Dp = 24.dp,
     color: Color = AppColors.Primary
 ) {
     M3ExpressiveLoadingIndicator(
@@ -303,11 +199,6 @@ fun AppBottomBar(
 
 /**
  * Draws a crisp concave inverted-fillet flare matching the notch background color.
- * cornerPosition:
- *  - "TR_LEFT": flare to the left of a Top-Right notch (concave faces bottom-left)
- *  - "TR_BOTTOM": flare below a Top-Right notch (concave faces bottom-left)
- *  - "BL_TOP": flare above a Bottom-Left notch (concave faces top-right)
- *  - "BL_RIGHT": flare to the right of a Bottom-Left notch (concave faces top-right)
  */
 @Composable
 private fun ConcaveCornerFlare(
@@ -320,13 +211,11 @@ private fun ConcaveCornerFlare(
         val s = this.size.minDimension
         val path = Path()
         if (concaveAtBottomLeft) {
-            // Solid corner sits at Top-Right; concave curve faces Bottom-Left
             path.moveTo(0f, 0f)
             path.lineTo(s, 0f)
             path.lineTo(s, s)
             path.quadraticTo(s, 0f, 0f, 0f)
         } else {
-            // Solid corner sits at Bottom-Left; concave curve faces Top-Right
             path.moveTo(0f, 0f)
             path.lineTo(0f, s)
             path.lineTo(s, s)
@@ -339,9 +228,12 @@ private fun ConcaveCornerFlare(
 
 /**
  * Refined Cutout / Concave-Flare Poster Card:
- * - Rounded poster art with seamless background-colored corner notches & concave flares
- * - Top-Right notch (only if score exists): warm gold rating pill with star icon
- * - Bottom-Left notch (only if sub/dub/ep/type exists): stacked colored pills (CC sub + Mic dub joined pair, crimson type pill)
+ * - Top-Right notch (only if rating exists): warm gold rating pill with star icon
+ * - Bottom-Left notch: ALWAYS occupies exact half-poster width (same width Type uses),
+ *   stacking Sub/Dub cleanly directly above Type:
+ *   - No Sub & No Dub: normal fully-rounded Type pill only
+ *   - Both Sub & Dub: top split into Sub & Dub boxes (icon+count if count exists; larger centered icon ONLY if count missing, NO "SUB"/"DUB" text) over Type box
+ *   - Single Sub OR Single Dub: top box spans exact same width as Type with rounded top & FLAT bottom, Type below has FLAT top & rounded bottom!
  */
 @Composable
 fun PosterCard(
@@ -360,13 +252,16 @@ fun PosterCard(
         ?: item.type.takeIf { it.isNotBlank() }?.uppercase()?.take(7)
         ?: item.quality?.takeIf { it.isNotBlank() }
 
-    val hasAudioOrEp = item.hasSub || item.hasDub || (item.episodeCount != null && item.episodeCount > 0)
-    val hasBottomNotch = hasAudioOrEp || typeText != null
+    val hasSubOrDub = item.hasSub || item.hasDub
+    val hasEpOnly = !hasSubOrDub && (item.episodeCount != null && item.episodeCount > 0)
+    val hasTopRow = hasSubOrDub || hasEpOnly
+    val hasBottomNotch = hasTopRow || typeText != null
 
     val cardRadius = 14.dp
     val notchGap = 3.dp
     val flareSize = 10.dp
     val badgeHeight = 17.dp
+    val typeHeight = 16.dp
     val innerCutRadius = 11.dp
 
     Column(
@@ -375,11 +270,14 @@ fun PosterCard(
             indication = null
         ) { onClick() }
     ) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(aspectRatio)
         ) {
+            // Bottom-left stack width is ALWAYS fixed to half the poster width
+            val notchStackWidth = (maxWidth * 0.50f).coerceAtLeast(48.dp)
+
             // Base rounded poster image
             Box(
                 modifier = Modifier
@@ -457,8 +355,12 @@ fun PosterCard(
                 }
             }
 
-            // Bottom-Left Concave Info Notch (Sub/Dub/EP + Type pills — only when data exists)
+            // Bottom-Left Concave Info Notch (Fixed half-poster width stack)
             if (hasBottomNotch) {
+                val hasTypeBelow = typeText != null
+                val bothAudio = item.hasSub && item.hasDub
+                val singleTopBox = hasTopRow && !bothAudio
+
                 Column(
                     modifier = Modifier.align(Alignment.BottomStart),
                     horizontalAlignment = Alignment.Start
@@ -476,96 +378,103 @@ fun PosterCard(
                                 .padding(top = notchGap, end = notchGap)
                         ) {
                             Column(
-                                modifier = Modifier.width(IntrinsicSize.Max),
-                                verticalArrangement = Arrangement.spacedBy(2.5.dp)
+                                modifier = Modifier.width(notchStackWidth),
+                                verticalArrangement = Arrangement.spacedBy(if (singleTopBox && hasTypeBelow) 1.5.dp else 2.dp)
                             ) {
-                                if (hasAudioOrEp) {
+                                if (hasTopRow) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(2.5.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        val bothAudio = item.hasSub && item.hasDub
-                                        if (item.hasSub) {
-                                            val subShape = if (bothAudio) {
+                                        if (bothAudio) {
+                                            // Split 50/50 within the exact same half-poster width
+                                            val subShape = RoundedCornerShape(
+                                                topStart = 8.dp,
+                                                topEnd = 3.dp,
+                                                bottomStart = if (hasTypeBelow) 2.dp else 8.dp,
+                                                bottomEnd = if (hasTypeBelow) 2.dp else 3.dp
+                                            )
+                                            val dubShape = RoundedCornerShape(
+                                                topStart = 3.dp,
+                                                topEnd = 8.dp,
+                                                bottomStart = if (hasTypeBelow) 2.dp else 3.dp,
+                                                bottomEnd = if (hasTypeBelow) 2.dp else 8.dp
+                                            )
+                                            AudioBadgeBox(
+                                                icon = AppIcons.ClosedCaption,
+                                                count = item.subEpisodes,
+                                                bgColor = AppColors.SubPill,
+                                                shape = subShape,
+                                                height = badgeHeight,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            AudioBadgeBox(
+                                                icon = AppIcons.Mic,
+                                                count = item.dubEpisodes,
+                                                bgColor = AppColors.DubPill,
+                                                shape = dubShape,
+                                                height = badgeHeight,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                        } else if (item.hasSub) {
+                                            // Single Sub box: rounded top, FLAT bottom when stacked over Type
+                                            val shape = if (hasTypeBelow) {
                                                 RoundedCornerShape(
-                                                    topStart = 9.dp, bottomStart = 9.dp,
-                                                    topEnd = 3.dp, bottomEnd = 3.dp
+                                                    topStart = 8.dp,
+                                                    topEnd = 8.dp,
+                                                    bottomStart = 0.dp,
+                                                    bottomEnd = 0.dp
                                                 )
                                             } else {
                                                 RoundedCornerShape(50)
                                             }
-                                            Row(
-                                                modifier = Modifier
-                                                    .weight(1f, fill = bothAudio)
-                                                    .height(badgeHeight)
-                                                    .clip(subShape)
-                                                    .background(AppColors.SubPill)
-                                                    .padding(horizontal = 5.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.Center
-                                            ) {
-                                                Icon(
-                                                    imageVector = AppIcons.ClosedCaption,
-                                                    contentDescription = null,
-                                                    tint = Color.White,
-                                                    modifier = Modifier.size(9.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(2.dp))
-                                                Text(
-                                                    text = item.subEpisodes?.toString() ?: "SUB",
-                                                    color = Color.White,
-                                                    fontSize = 8.sp,
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    lineHeight = 8.sp,
-                                                    maxLines = 1
-                                                )
-                                            }
-                                        }
-                                        if (item.hasDub) {
-                                            val dubShape = if (bothAudio) {
+                                            AudioBadgeBox(
+                                                icon = AppIcons.ClosedCaption,
+                                                count = item.subEpisodes,
+                                                bgColor = AppColors.SubPill,
+                                                shape = shape,
+                                                height = badgeHeight,
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        } else if (item.hasDub) {
+                                            // Single Dub box: rounded top, FLAT bottom when stacked over Type
+                                            val shape = if (hasTypeBelow) {
                                                 RoundedCornerShape(
-                                                    topStart = 3.dp, bottomStart = 3.dp,
-                                                    topEnd = 9.dp, bottomEnd = 9.dp
+                                                    topStart = 8.dp,
+                                                    topEnd = 8.dp,
+                                                    bottomStart = 0.dp,
+                                                    bottomEnd = 0.dp
                                                 )
                                             } else {
                                                 RoundedCornerShape(50)
                                             }
-                                            Row(
-                                                modifier = Modifier
-                                                    .weight(1f, fill = bothAudio)
-                                                    .height(badgeHeight)
-                                                    .clip(dubShape)
-                                                    .background(AppColors.DubPill)
-                                                    .padding(horizontal = 5.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.Center
-                                            ) {
-                                                Icon(
-                                                    imageVector = AppIcons.Mic,
-                                                    contentDescription = null,
-                                                    tint = Color.White,
-                                                    modifier = Modifier.size(9.dp)
+                                            AudioBadgeBox(
+                                                icon = AppIcons.Mic,
+                                                count = item.dubEpisodes,
+                                                bgColor = AppColors.DubPill,
+                                                shape = shape,
+                                                height = badgeHeight,
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        } else if (hasEpOnly && item.episodeCount != null) {
+                                            val shape = if (hasTypeBelow) {
+                                                RoundedCornerShape(
+                                                    topStart = 8.dp,
+                                                    topEnd = 8.dp,
+                                                    bottomStart = 0.dp,
+                                                    bottomEnd = 0.dp
                                                 )
-                                                Spacer(modifier = Modifier.width(2.dp))
-                                                Text(
-                                                    text = item.dubEpisodes?.toString() ?: "DUB",
-                                                    color = Color.White,
-                                                    fontSize = 8.sp,
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    lineHeight = 8.sp,
-                                                    maxLines = 1
-                                                )
+                                            } else {
+                                                RoundedCornerShape(50)
                                             }
-                                        }
-                                        if (!item.hasSub && !item.hasDub && item.episodeCount != null) {
                                             Box(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
                                                     .height(badgeHeight)
-                                                    .clip(RoundedCornerShape(50))
+                                                    .clip(shape)
                                                     .background(AppColors.EpisodePill)
-                                                    .padding(horizontal = 6.dp),
+                                                    .padding(horizontal = 4.dp),
                                                 contentAlignment = Alignment.Center
                                             ) {
                                                 Text(
@@ -582,14 +491,32 @@ fun PosterCard(
                                 }
 
                                 if (typeText != null) {
+                                    // Type box shape:
+                                    // - Standalone (no top row): fully rounded pill
+                                    // - Single Sub/Dub/EP above: FLAT top, rounded bottom
+                                    // - Both Sub+Dub above: tight flat-ish top, rounded bottom
+                                    val typeShape = when {
+                                        !hasTopRow -> RoundedCornerShape(50)
+                                        singleTopBox -> RoundedCornerShape(
+                                            topStart = 0.dp,
+                                            topEnd = 0.dp,
+                                            bottomStart = 8.dp,
+                                            bottomEnd = 8.dp
+                                        )
+                                        else -> RoundedCornerShape(
+                                            topStart = 2.dp,
+                                            topEnd = 2.dp,
+                                            bottomStart = 8.dp,
+                                            bottomEnd = 8.dp
+                                        )
+                                    }
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .defaultMinSize(minWidth = 44.dp)
-                                            .height(16.dp)
-                                            .clip(RoundedCornerShape(50))
+                                            .height(typeHeight)
+                                            .clip(typeShape)
                                             .background(AppColors.TypePill)
-                                            .padding(horizontal = 7.dp),
+                                            .padding(horizontal = 4.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text(
@@ -597,9 +524,11 @@ fun PosterCard(
                                             color = Color.White,
                                             fontSize = 7.5.sp,
                                             fontWeight = FontWeight.ExtraBold,
-                                            letterSpacing = 0.5.sp,
+                                            letterSpacing = 0.4.sp,
                                             lineHeight = 8.sp,
-                                            maxLines = 1
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Clip
                                         )
                                     }
                                 }
@@ -627,6 +556,57 @@ fun PosterCard(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 2.dp)
         )
+    }
+}
+
+/**
+ * Sub/Dub mini badge inside the half-poster-width notch:
+ * - If episode count exists: crisp icon + count number
+ * - If episode count is null: ONLY slightly larger centered icon (NO "SUB"/"DUB" text!)
+ */
+@Composable
+private fun AudioBadgeBox(
+    icon: ImageVector,
+    count: Int?,
+    bgColor: Color,
+    shape: RoundedCornerShape,
+    height: Dp,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .height(height)
+            .clip(shape)
+            .background(bgColor)
+            .padding(horizontal = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        if (count != null && count > 0) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(9.dp)
+            )
+            Spacer(modifier = Modifier.width(2.dp))
+            Text(
+                text = count.toString(),
+                color = Color.White,
+                fontSize = 8.sp,
+                fontWeight = FontWeight.ExtraBold,
+                lineHeight = 8.sp,
+                maxLines = 1,
+                softWrap = false
+            )
+        } else {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(12.dp)
+            )
+        }
     }
 }
 

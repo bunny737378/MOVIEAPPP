@@ -4,6 +4,8 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xtsream.app.data.MediaCardItem
+import com.xtsream.app.data.TmdbSuggestion
+import com.xtsream.app.data.TmdbSuggestionsApi
 import com.xtsream.app.data.WatchlistStore
 import com.xtsream.app.data.toMediaCardItem
 import com.xtsream.app.engine.ExtensionController
@@ -30,8 +32,8 @@ enum class SearchDubFilter(val label: String) {
 
 data class SearchFilters(
     val titleContains: String = "",
-    val selectedType: String? = null, // null = All types
-    val minRating: Double? = null,    // null = Any rating (e.g., 6.0, 7.0, 8.0, 9.0)
+    val selectedType: String? = null,
+    val minRating: Double? = null,
     val dubFilter: SearchDubFilter = SearchDubFilter.All
 ) {
     val activeCount: Int
@@ -81,6 +83,7 @@ data class SearchUiState(
     val isLoadingMore: Boolean = false,
     val hasSearched: Boolean = false,
     val isGridView: Boolean = true,
+    val tmdbSuggestions: List<TmdbSuggestion> = emptyList(),
     val quickSuggestions: List<MediaCardItem> = emptyList(),
     val globalGroups: List<ProviderSearchGroup> = emptyList(),
     val singleProviderItems: List<MediaCardItem> = emptyList(),
@@ -104,7 +107,13 @@ class SearchViewModel : ViewModel() {
     private val loadMoreCounter = AtomicLong(0L)
 
     fun focusProviderScope(providerKey: String?) {
-        _uiState.update { it.copy(selectedProviderKey = providerKey) }
+        _uiState.update {
+            it.copy(
+                selectedProviderKey = providerKey,
+                tmdbSuggestions = emptyList(),
+                quickSuggestions = emptyList()
+            )
+        }
     }
 
     fun onQueryChange(newQuery: String) {
@@ -116,6 +125,7 @@ class SearchViewModel : ViewModel() {
             _uiState.update {
                 it.copy(
                     isSearching = false,
+                    tmdbSuggestions = emptyList(),
                     quickSuggestions = emptyList(),
                     hasSearched = false,
                     globalGroups = emptyList(),
@@ -126,29 +136,75 @@ class SearchViewModel : ViewModel() {
             return
         }
 
-        val targetEntry = resolveSingleTargetEntry() ?: ExtensionController.activeProvider.value
-        val targetApi = targetEntry?.api
-        if (targetEntry != null && targetApi != null && targetApi.hasQuickSearch) {
-            quickJob?.cancel()
+        triggerSuggestions(newQuery)
+    }
+
+    private fun triggerSuggestions(rawQuery: String) {
+        val trimmed = rawQuery.trim()
+        quickJob?.cancel()
+        if (trimmed.length < 2) {
+            _uiState.update { it.copy(tmdbSuggestions = emptyList(), quickSuggestions = emptyList()) }
+            return
+        }
+
+        val selectedKey = _uiState.value.selectedProviderKey
+        if (selectedKey == null) {
+            // "All" providers selected -> TMDB /search/multi suggestions
+            _uiState.update { it.copy(quickSuggestions = emptyList()) }
             quickJob = viewModelScope.launch(Dispatchers.IO) {
                 try {
-                    delay(350)
-                    val res = withTimeoutOrNull(12_000L) { targetApi.quickSearch(newQuery.trim()) }
-                    val mapped = res.orEmpty().take(8).map { it.toMediaCardItem(apiKey = targetEntry.key) }
-                    _uiState.update { it.copy(quickSuggestions = mapped) }
+                    delay(240)
+                    val list = withTimeoutOrNull(8_000L) {
+                        TmdbSuggestionsApi.suggest(trimmed, limit = 8)
+                    }.orEmpty()
+                    if (_uiState.value.selectedProviderKey == null && _uiState.value.query.trim() == trimmed) {
+                        _uiState.update { it.copy(tmdbSuggestions = list) }
+                    }
                 } catch (ce: CancellationException) {
                     throw ce
                 } catch (_: Throwable) {
                 }
+            }
+        } else {
+            // Specific provider selected -> call ONLY that provider's quickSearch if hasQuickSearch == true
+            _uiState.update { it.copy(tmdbSuggestions = emptyList()) }
+            val targetEntry = resolveSingleTargetEntry()
+            val targetApi = targetEntry?.api
+            if (targetEntry != null && targetApi != null && targetApi.hasQuickSearch) {
+                quickJob = viewModelScope.launch(Dispatchers.IO) {
+                    try {
+                        delay(300)
+                        val res = withTimeoutOrNull(12_000L) { targetApi.quickSearch(trimmed) }
+                        val mapped = res.orEmpty().take(8).map { it.toMediaCardItem(apiKey = targetEntry.key) }
+                        if (_uiState.value.selectedProviderKey == selectedKey && _uiState.value.query.trim() == trimmed) {
+                            _uiState.update { it.copy(quickSuggestions = mapped) }
+                        }
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    } catch (_: Throwable) {
+                    }
+                }
+            } else {
+                _uiState.update { it.copy(quickSuggestions = emptyList()) }
             }
         }
     }
 
     fun selectProviderFilter(providerKey: String?) {
         if (_uiState.value.selectedProviderKey == providerKey) return
-        _uiState.update { it.copy(selectedProviderKey = providerKey) }
-        if (_uiState.value.query.isNotBlank() && _uiState.value.hasSearched) {
-            executeSearch()
+        _uiState.update {
+            it.copy(
+                selectedProviderKey = providerKey,
+                tmdbSuggestions = emptyList(),
+                quickSuggestions = emptyList()
+            )
+        }
+        if (_uiState.value.query.isNotBlank()) {
+            if (_uiState.value.hasSearched) {
+                executeSearch()
+            } else {
+                triggerSuggestions(_uiState.value.query)
+            }
         }
     }
 
@@ -188,6 +244,7 @@ class SearchViewModel : ViewModel() {
                 isSearching = false,
                 isLoadingMore = false,
                 hasSearched = false,
+                tmdbSuggestions = emptyList(),
                 quickSuggestions = emptyList(),
                 globalGroups = emptyList(),
                 singleProviderItems = emptyList(),
@@ -227,6 +284,7 @@ class SearchViewModel : ViewModel() {
                 hasSearched = true,
                 isSearching = true,
                 isLoadingMore = false,
+                tmdbSuggestions = emptyList(),
                 quickSuggestions = emptyList(),
                 globalGroups = emptyList(),
                 singleProviderItems = emptyList(),

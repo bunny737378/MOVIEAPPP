@@ -444,11 +444,23 @@ object ExtensionController {
                 )
 
                 if (!loaded) {
-                    return@withContext Result.failure(IllegalStateException("Downloaded \"$pluginName\" but failed to load .cs3"))
+                    val reason = PluginManager.lastError?.takeIf { it.isNotBlank() }
+                    val msg = if (reason != null) {
+                        "Failed to load \"$pluginName\": $reason"
+                    } else {
+                        "Downloaded \"$pluginName\" but failed to load .cs3"
+                    }
+                    return@withContext Result.failure(IllegalStateException(msg))
                 }
 
                 // Wait for async meta-repo plugins (e.g. MegaProvider.cs3) to populate child repos
                 waitForAsyncRepoSync(reposBefore.size)
+                val isMega = pluginName.contains("MegaProvider", ignoreCase = true) ||
+                    pluginName.contains("MegaRepo", ignoreCase = true) ||
+                    cs3Url.contains("MegaProvider", ignoreCase = true)
+                if (isMega && RepositoryManager.getRepositories().size <= reposBefore.size) {
+                    syncMegaReposDbFallback()
+                }
                 refreshRuntimeState()
 
                 val reposAfter = RepositoryManager.getRepositories().map { it.url }.toSet()
@@ -643,6 +655,13 @@ object ExtensionController {
                     if (installRes.isSuccess) {
                         metaSynced = true
                     }
+                    if (RepositoryManager.getRepositories().size <= reposBefore.size) {
+                        val fallbackAdded = syncMegaReposDbFallback()
+                        if (fallbackAdded > 0) {
+                            addedChildren += fallbackAdded
+                            metaSynced = true
+                        }
+                    }
                 }
 
                 refreshRuntimeState()
@@ -666,6 +685,23 @@ object ExtensionController {
                 _loadingRepos.update { it - repoUrl }
             }
         }
+
+    private suspend fun syncMegaReposDbFallback(): Int {
+        val dbUrls = listOf(
+            "https://raw.githubusercontent.com/recloudstream/cs-repos/master/repos-db.json",
+            "https://raw.githubusercontent.com/self-hosted-cloudstream/repos/master/repos-db.json"
+        )
+        for (dbUrl in dbUrls) {
+            val raw = runCatching {
+                app.get(dbUrl, cacheTime = 10, cacheUnit = TimeUnit.MINUTES).text.trim()
+            }.getOrNull()
+            if (!raw.isNullOrBlank() && raw.startsWith("[")) {
+                val count = importReposDbArray(raw)
+                if (count > 0) return count
+            }
+        }
+        return 0
+    }
 
     private suspend fun importReposDbArray(rawJsonArray: String): Int {
         val urls = runCatching {
@@ -853,11 +889,20 @@ object ExtensionController {
             )
 
             if (!loaded) {
-                return@withContext Result.failure(IllegalStateException("Failed to load ${plugin.name} (.cs3)"))
+                val reason = PluginManager.lastError?.takeIf { it.isNotBlank() }
+                val msg = if (reason != null) {
+                    "Failed to load ${plugin.name}: $reason"
+                } else {
+                    "Failed to load ${plugin.name} (.cs3)"
+                }
+                return@withContext Result.failure(IllegalStateException(msg))
             }
 
             if (isMetaRepoLoaderPlugin(plugin)) {
                 waitForAsyncRepoSync(reposBefore.size)
+                if (RepositoryManager.getRepositories().size <= reposBefore.size) {
+                    syncMegaReposDbFallback()
+                }
             } else {
                 delay(250)
             }
