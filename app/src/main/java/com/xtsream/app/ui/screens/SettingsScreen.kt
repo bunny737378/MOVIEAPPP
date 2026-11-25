@@ -9,28 +9,24 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.preference.PreferenceManager
-import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.network.initClient
 import com.xtsream.app.R
 import com.xtsream.app.data.WatchlistStore
 import com.xtsream.app.engine.ExtensionController
 import com.xtsream.app.ui.components.AppIcons
+import com.xtsream.app.ui.components.AppToastManager
 import com.xtsream.app.ui.theme.AppColors
-import kotlinx.coroutines.delay
 
 private data class DnsOption(val id: Int, val label: String, val subtitle: String)
 
@@ -52,7 +48,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     val repositories by ExtensionController.repositories.collectAsState()
     val installedPlugins by ExtensionController.installedPlugins.collectAsState()
-    val loadedApis by ExtensionController.loadedApis.collectAsState()
+    val loadedProviders by ExtensionController.loadedProviders.collectAsState()
     val recentSearches by WatchlistStore.recentSearches.collectAsState()
     val recentViewed by WatchlistStore.recentlyViewed.collectAsState()
 
@@ -60,14 +56,6 @@ fun SettingsScreen(
     val dnsKey = remember { context.getString(R.string.dns_key) }
     var selectedDns by remember { mutableIntStateOf(prefs.getInt(dnsKey, 0)) }
     var showDnsDialog by remember { mutableStateOf(false) }
-    var toastText by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(toastText) {
-        if (toastText != null) {
-            delay(2800)
-            toastText = null
-        }
-    }
 
     val currentDnsLabel = remember(selectedDns) {
         DNS_OPTIONS.firstOrNull { it.id == selectedDns }?.label ?: "System Default (Off)"
@@ -93,24 +81,6 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 24.dp)
         ) {
-            if (toastText != null) {
-                item(key = "toast") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(AppColors.SurfaceCard)
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Filled.Check, null, tint = AppColors.Success, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(toastText!!, color = AppColors.TextPrimary, fontSize = 13.sp)
-                    }
-                }
-            }
-
             item(key = "extensions_group") {
                 SettingsCategoryHeader("EXTENSIONS")
                 SettingsFlatRow(
@@ -119,7 +89,7 @@ fun SettingsScreen(
                     subtitle = if (installedPlugins.isEmpty() && repositories.isEmpty()) {
                         "Manage CloudStream repositories & .cs3 extensions"
                     } else {
-                        "${repositories.size} repositories • ${installedPlugins.size} installed • ${loadedApis.size} active"
+                        "${repositories.size} repositories • ${installedPlugins.size} installed • ${loadedProviders.size} active"
                     },
                     showChevron = true,
                     onClick = onOpenProviders
@@ -149,7 +119,7 @@ fun SettingsScreen(
                         val freedBytes = ExtensionController.clearHttpCache(context)
                         val kb = freedBytes / 1024.0
                         val formatted = if (kb >= 1024.0) String.format("%.1f MB", kb / 1024.0) else String.format("%.0f KB", kb)
-                        toastText = "Cleared HTTP cache ($formatted freed)"
+                        AppToastManager.showSuccess("Cleared HTTP cache ($formatted freed)")
                     }
                 )
                 SettingsFlatRow(
@@ -158,7 +128,7 @@ fun SettingsScreen(
                     subtitle = "${recentSearches.size} saved query(s)",
                     onClick = {
                         WatchlistStore.clearRecentSearches()
-                        toastText = "Search history cleared"
+                        AppToastManager.showSuccess("Search history cleared")
                     }
                 )
                 SettingsFlatRow(
@@ -167,7 +137,7 @@ fun SettingsScreen(
                     subtitle = "${recentViewed.size} title(s) in history",
                     onClick = {
                         WatchlistStore.clearRecentlyViewed()
-                        toastText = "Recently viewed cleared"
+                        AppToastManager.showSuccess("Recently viewed cleared")
                     }
                 )
             }
@@ -191,9 +161,9 @@ fun SettingsScreen(
                                 .clickable {
                                     selectedDns = option.id
                                     prefs.edit().putInt(dnsKey, option.id).apply()
-                                    app.initClient(context.applicationContext)
+                                    ExtensionController.reinitNetworkClients(context)
                                     showDnsDialog = false
-                                    toastText = "DNS set to ${option.label}"
+                                    AppToastManager.showSuccess("DNS set to ${option.label}")
                                 }
                                 .padding(horizontal = 8.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically

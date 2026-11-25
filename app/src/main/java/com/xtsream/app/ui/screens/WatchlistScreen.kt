@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import com.xtsream.app.data.MediaCardItem
 import com.xtsream.app.data.WatchlistStore
 import com.xtsream.app.ui.components.AppIcons
+import com.xtsream.app.ui.components.AppToastManager
 import com.xtsream.app.ui.components.MediaListRowCard
 import com.xtsream.app.ui.components.PosterCard
 import com.xtsream.app.ui.theme.AppColors
@@ -53,7 +54,12 @@ fun WatchlistScreen(
                 fontWeight = FontWeight.Bold
             )
             if (activeTab == 1 && recentViewed.isNotEmpty()) {
-                TextButton(onClick = { WatchlistStore.clearRecentlyViewed() }) {
+                TextButton(
+                    onClick = {
+                        WatchlistStore.clearRecentlyViewed()
+                        AppToastManager.showSuccess("Cleared recent history")
+                    }
+                ) {
                     Text("Clear", color = AppColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 }
             }
@@ -99,7 +105,7 @@ fun WatchlistScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(watchlist, key = { it.url }) { item ->
+                    items(watchlist, key = { "${it.apiKey}_${it.url}" }) { item ->
                         PosterCard(
                             item = item,
                             modifier = Modifier.fillMaxWidth(),
@@ -128,13 +134,18 @@ fun WatchlistScreen(
                     contentPadding = PaddingValues(vertical = 8.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(recentViewed, key = { it.url }) { item ->
+                    items(recentViewed, key = { "${it.apiKey}_${it.url}" }) { item ->
                         MediaListRowCard(
                             item = item,
                             onClick = { onMediaClick(item) },
                             trailingContent = {
                                 if (watchlist.any { it.url == item.url }) {
-                                    IconButton(onClick = { WatchlistStore.removeFromWatchlist(item.url) }) {
+                                    IconButton(
+                                        onClick = {
+                                            WatchlistStore.removeFromWatchlist(item.url)
+                                            AppToastManager.showSuccess("Removed from Watchlist")
+                                        }
+                                    ) {
                                         Icon(Icons.Filled.Delete, "Remove", tint = AppColors.TextMuted, modifier = Modifier.size(18.dp))
                                     }
                                 }

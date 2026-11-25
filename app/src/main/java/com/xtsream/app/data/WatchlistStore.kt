@@ -35,16 +35,20 @@ object WatchlistStore {
 
     fun isInWatchlist(url: String): Boolean = _watchlist.value.any { it.url == url }
 
-    fun toggleWatchlist(item: MediaCardItem) {
+    fun toggleWatchlist(item: MediaCardItem): Boolean {
         val current = _watchlist.value.toMutableList()
         val existingIdx = current.indexOfFirst { it.url == item.url }
+        val added: Boolean
         if (existingIdx >= 0) {
             current.removeAt(existingIdx)
+            added = false
         } else {
             current.add(0, item)
+            added = true
         }
         _watchlist.value = current
         saveMediaList(KEY_WATCHLIST, current)
+        return added
     }
 
     fun removeFromWatchlist(url: String) {
@@ -94,6 +98,7 @@ object WatchlistStore {
                 put("title", item.title)
                 put("url", item.url)
                 put("apiName", item.apiName)
+                put("apiKey", item.apiKey)
                 put("posterUrl", item.posterUrl ?: "")
                 put("type", item.type)
                 put("shortType", item.shortType)
@@ -134,6 +139,7 @@ object WatchlistStore {
                             title = obj.optString("title", ""),
                             url = obj.optString("url", ""),
                             apiName = obj.optString("apiName", ""),
+                            apiKey = obj.optString("apiKey", ""),
                             posterUrl = obj.optString("posterUrl", "").takeIf { it.isNotBlank() },
                             posterHeaders = headers,
                             type = obj.optString("type", ""),

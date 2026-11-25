@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.MainPageRequest
 import com.xtsream.app.data.MediaCardItem
 import com.xtsream.app.data.toMediaCardItem
 import com.xtsream.app.engine.ExtensionController
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,10 +17,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicLong
 
 sealed class SeeAllSource {
     data class HomeCategory(
+        val apiKey: String,
         val apiName: String,
+        val displayName: String,
         val title: String,
         val mainPageData: MainPageData,
         val initialItems: List<MediaCardItem>,
@@ -27,7 +31,9 @@ sealed class SeeAllSource {
     ) : SeeAllSource()
 
     data class SearchProvider(
+        val apiKey: String,
         val apiName: String,
+        val displayName: String,
         val query: String,
         val initialItems: List<MediaCardItem>,
         val hasNext: Boolean
@@ -56,11 +62,12 @@ class SeeAllViewModel : ViewModel() {
     private var source: SeeAllSource? = null
     private var initializedKey: String? = null
     private var pageJob: Job? = null
+    private val pageRequestCounter = AtomicLong(0L)
 
     fun init(newSource: SeeAllSource) {
         val key = when (newSource) {
-            is SeeAllSource.HomeCategory -> "home_${newSource.apiName}_${newSource.title}"
-            is SeeAllSource.SearchProvider -> "search_${newSource.apiName}_${newSource.query}"
+            is SeeAllSource.HomeCategory -> "home_${newSource.apiKey}_${newSource.title}"
+            is SeeAllSource.SearchProvider -> "search_${newSource.apiKey}_${newSource.query}"
         }
         if (initializedKey == key) return
         initializedKey = key
@@ -70,7 +77,7 @@ class SeeAllViewModel : ViewModel() {
             is SeeAllSource.HomeCategory -> {
                 _uiState.value = SeeAllUiState(
                     title = newSource.title,
-                    subtitle = newSource.apiName,
+                    subtitle = newSource.displayName,
                     items = newSource.initialItems,
                     hasMore = newSource.hasNext,
                     nextPage = 2
@@ -78,7 +85,7 @@ class SeeAllViewModel : ViewModel() {
             }
             is SeeAllSource.SearchProvider -> {
                 _uiState.value = SeeAllUiState(
-                    title = newSource.apiName,
+                    title = newSource.displayName,
                     subtitle = "Results for \"${newSource.query}\"",
                     items = newSource.initialItems,
                     hasMore = newSource.hasNext,
@@ -97,6 +104,7 @@ class SeeAllViewModel : ViewModel() {
         val src = source ?: return
         if (current.isLoadingMore || !current.hasMore) return
 
+        val myRequestId = pageRequestCounter.incrementAndGet()
         _uiState.update { it.copy(isLoadingMore = true, errorMessage = null) }
         val page = current.nextPage
 
@@ -105,15 +113,28 @@ class SeeAllViewModel : ViewModel() {
             try {
                 when (src) {
                     is SeeAllSource.HomeCategory -> {
-                        val api = ExtensionController.getApiByName(src.apiName) ?: return@launch
+                        val api = ExtensionController.resolveApi(src.apiKey, src.apiName)
+                        if (api == null) {
+                            if (pageRequestCounter.get() == myRequestId) {
+                                _uiState.update { it.copy(isLoadingMore = false, hasMore = false) }
+                            }
+                            return@launch
+                        }
                         val req = MainPageRequest(
                             name = src.mainPageData.name,
                             data = src.mainPageData.data,
                             horizontalImages = src.mainPageData.horizontalImages
                         )
-                        val resp = withTimeoutOrNull(25_000L) { api.getMainPage(page, req) }
+                        val resp = withTimeoutOrNull(35_000L) { api.getMainPage(page, req) }
+                        if (pageRequestCounter.get() != myRequestId) return@launch
+
                         val newItems = resp?.items?.flatMap { hl ->
-                            hl.list.map { it.toMediaCardItem(isHorizontal = hl.isHorizontalImages) }
+                            hl.list.map {
+                                it.toMediaCardItem(
+                                    isHorizontal = hl.isHorizontalImages,
+                                    apiKey = src.apiKey
+                                )
+                            }
                         }.orEmpty()
 
                         _uiState.update { st ->
@@ -128,9 +149,17 @@ class SeeAllViewModel : ViewModel() {
                     }
 
                     is SeeAllSource.SearchProvider -> {
-                        val api = ExtensionController.getApiByName(src.apiName) ?: return@launch
-                        val resp = withTimeoutOrNull(25_000L) { api.search(src.query, page) }
-                        val newItems = resp?.items?.map { it.toMediaCardItem() }.orEmpty()
+                        val api = ExtensionController.resolveApi(src.apiKey, src.apiName)
+                        if (api == null) {
+                            if (pageRequestCounter.get() == myRequestId) {
+                                _uiState.update { it.copy(isLoadingMore = false, hasMore = false) }
+                            }
+                            return@launch
+                        }
+                        val resp = withTimeoutOrNull(35_000L) { api.search(src.query, page) }
+                        if (pageRequestCounter.get() != myRequestId) return@launch
+
+                        val newItems = resp?.items?.map { it.toMediaCardItem(apiKey = src.apiKey) }.orEmpty()
 
                         _uiState.update { st ->
                             val merged = (st.items + newItems).distinctBy { it.url }
@@ -143,14 +172,18 @@ class SeeAllViewModel : ViewModel() {
                         }
                     }
                 }
+            } catch (ce: CancellationException) {
+                throw ce
             } catch (t: Throwable) {
                 Log.w(TAG, "Pagination failed", t)
-                _uiState.update {
-                    it.copy(
-                        isLoadingMore = false,
-                        hasMore = false,
-                        errorMessage = t.message
-                    )
+                if (pageRequestCounter.get() == myRequestId) {
+                    _uiState.update {
+                        it.copy(
+                            isLoadingMore = false,
+                            hasMore = false,
+                            errorMessage = formatFriendlyError(t, _uiState.value.subtitle.ifBlank { "provider" })
+                        )
+                    }
                 }
             }
         }

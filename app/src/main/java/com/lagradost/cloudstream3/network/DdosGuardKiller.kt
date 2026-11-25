@@ -8,16 +8,17 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.Interceptor
 import okhttp3.Request
 import okhttp3.Response
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * @param alwaysBypass will pre-emptively fetch ddos guard cookies if true.
  * If false it will only try to get cookies when a request returns 403
- * */
-// As seen in https://github.com/anime-dl/anime-downloader/blob/master/anime_downloader/sites/erairaws.py
+ */
 @AnyThread
 class DdosGuardKiller(private val alwaysBypass: Boolean) : Interceptor {
-    val savedCookiesMap = mutableMapOf<String, Map<String, String>>()
+    val savedCookiesMap: MutableMap<String, Map<String, String>> = ConcurrentHashMap()
 
+    @Volatile
     private var ddosBypassPath: String? = null
 
     override fun intercept(chain: Interceptor.Chain): Response = runBlocking {
@@ -25,27 +26,25 @@ class DdosGuardKiller(private val alwaysBypass: Boolean) : Interceptor {
         if (alwaysBypass) return@runBlocking bypassDdosGuard(request)
 
         val response = chain.proceed(request)
-        return@runBlocking if (response.code == 403) {
-            bypassDdosGuard(request)
-        } else response
+        if (response.code == 403) {
+            response.close()
+            savedCookiesMap.remove(request.url.host)
+            return@runBlocking bypassDdosGuard(request)
+        }
+        return@runBlocking response
     }
 
     private suspend fun bypassDdosGuard(request: Request): Response {
         ddosBypassPath = ddosBypassPath ?: Regex("'(.*?)'").find(
-            app.get(
-                "https://check.ddos-guard.net/check.js"
-            ).text
+            app.get("https://check.ddos-guard.net/check.js").text
         )?.groupValues?.get(1)
 
-        val cookies =
-            savedCookiesMap[request.url.host]
-            // If no cookies are found fetch and save em.
-                ?: (request.url.scheme + "://" + request.url.host + (ddosBypassPath ?: "")).let {
-                    // Somehow app.get fails
-                    Requests().get(it).cookies.also { cookies ->
-                        savedCookiesMap[request.url.host] = cookies
-                    }
+        val cookies = savedCookiesMap[request.url.host]
+            ?: (request.url.scheme + "://" + request.url.host + (ddosBypassPath ?: "")).let {
+                Requests().get(it).cookies.also { c ->
+                    savedCookiesMap[request.url.host] = c
                 }
+            }
 
         val headers = getHeaders(request.headers.toMap(), cookies + request.cookies)
         return app.baseClient.newCall(

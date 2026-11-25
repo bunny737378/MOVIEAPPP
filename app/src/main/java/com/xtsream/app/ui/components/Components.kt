@@ -1,14 +1,21 @@
 package com.xtsream.app.ui.components
 
 import android.content.Context
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.GenericShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -25,20 +32,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
@@ -46,10 +50,13 @@ import coil3.network.NetworkHeaders
 import coil3.network.httpHeaders
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import com.lagradost.cloudstream3.MainAPI
 import com.xtsream.app.data.MediaCardItem
+import com.xtsream.app.engine.ProviderEntry
 import com.xtsream.app.ui.theme.AppColors
-import kotlin.math.min
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.pow
+import kotlin.math.sin
 
 enum class MainTab(
     val label: String,
@@ -63,39 +70,159 @@ enum class MainTab(
 }
 
 /**
- * Standard Material 3 indeterminate spinner used across all loading states.
+ * Material 3 Expressive Loading Indicator (Normal variant):
+ * Smoothly rotating, continuously morphing rounded organic polygon sequence
+ * (Soft Burst -> Rounded Clover -> Scalloped Pentagon -> Pill -> Rounded Star)
+ * matching https://m3.material.io/components/loading-indicator/overview
+ */
+@Composable
+fun M3ExpressiveLoadingIndicator(
+    modifier: Modifier = Modifier,
+    size: Dp = 36.dp,
+    color: Color = AppColors.Primary
+) {
+    val transition = rememberInfiniteTransition(label = "m3_loading")
+    // Continuous morph timeline across 5 signature M3 Expressive shapes
+    val morphPhase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 5f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 3250, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "m3_morph"
+    )
+    // Gentle continuous rotation combined with springy step impulses
+    val baseRotation by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 3250, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "m3_rot"
+    )
+
+    Canvas(modifier = modifier.size(size)) {
+        val cx = this.size.width / 2f
+        val cy = this.size.height / 2f
+        val maxR = this.size.minDimension * 0.44f
+
+        val stage = morphPhase.toInt().coerceIn(0, 4)
+        val rawFrac = morphPhase - stage
+        // Expressive springy ease-in-out curve for crisp shape-holding & snappy morphs
+        val t = smoothExpressiveStep(rawFrac)
+        val nextStage = (stage + 1) % 5
+
+        val stepAngle = (stage + t) * 72f
+        val angleDeg = (baseRotation * 0.5f + stepAngle * 0.5f) % 360f
+
+        val samples = 72
+        val path = Path()
+        for (i in 0 until samples) {
+            val theta = (2.0 * PI * i) / samples
+            val r0 = m3ExpressiveShapeRadius(stage, theta)
+            val r1 = m3ExpressiveShapeRadius(nextStage, theta)
+            val r = (r0 + (r1 - r0) * t).toFloat() * maxR
+            val x = cx + (r * cos(theta)).toFloat()
+            val y = cy + (r * sin(theta)).toFloat()
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        path.close()
+
+        rotate(degrees = angleDeg, pivot = Offset(cx, cy)) {
+            drawPath(path = path, color = color)
+        }
+    }
+}
+
+private fun smoothExpressiveStep(x: Float): Float {
+    val clamped = x.coerceIn(0f, 1f)
+    // Pause briefly on each target shape, then snap smoothly into the next
+    val remapped = ((clamped - 0.12f) / 0.76f).coerceIn(0f, 1f)
+    // Cubic Hermite with slight expressive punch
+    return remapped * remapped * (3f - 2f * remapped)
+}
+
+/**
+ * Polar radius r(theta) in [0.68..1.05] for Material 3 Expressive's morphing polygon sequence:
+ * 0: Soft Burst (8-lobe flower)
+ * 1: Clover (4-lobe quatrefoil)
+ * 2: Soft Pentagon (5-lobe rounded polygon)
+ * 3: Squircle / Rounded Pill (2-lobe oval)
+ * 4: Scalloped Cookie (6-lobe bloom)
+ */
+private fun m3ExpressiveShapeRadius(stage: Int, theta: Double): Double {
+    return when (stage) {
+        0 -> 0.86 + 0.14 * cos(8.0 * theta)
+        1 -> 0.80 + 0.20 * cos(4.0 * theta)
+        2 -> 0.88 + 0.11 * cos(5.0 * theta)
+        3 -> {
+            // Smooth rounded pill / oval
+            val a = 1.04
+            val b = 0.72
+            val c = cos(theta)
+            val s = sin(theta)
+            1.0 / ((c / a).pow(4) + (s / b).pow(4)).pow(0.25)
+        }
+        else -> 0.84 + 0.16 * cos(6.0 * theta)
+    }
+}
+
+/**
+ * Material 3 Expressive Contained Loading Indicator (Contained variant):
+ * Morphing polygon centered inside a circular tonal container.
+ */
+@Composable
+fun M3ContainedLoadingIndicator(
+    modifier: Modifier = Modifier,
+    containerSize: Dp = 50.dp,
+    indicatorSize: Dp = 32.dp,
+    containerColor: Color = AppColors.SurfaceElevated,
+    indicatorColor: Color = AppColors.Primary
+) {
+    Box(
+        modifier = modifier
+            .size(containerSize)
+            .clip(CircleShape)
+            .background(containerColor),
+        contentAlignment = Alignment.Center
+    ) {
+        M3ExpressiveLoadingIndicator(
+            size = indicatorSize,
+            color = indicatorColor
+        )
+    }
+}
+
+/**
+ * Full-screen Material 3 Contained Loading Indicator.
  */
 @Composable
 fun M3LoadingView(
-    modifier: Modifier = Modifier,
-    size: Dp = 36.dp
+    modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(size),
-            color = AppColors.Primary,
-            trackColor = AppColors.SurfaceElevated,
-            strokeWidth = 3.dp,
-            strokeCap = StrokeCap.Round
-        )
+        M3ContainedLoadingIndicator()
     }
 }
 
+/**
+ * Inline Material 3 Normal (Uncontained) Loading Indicator.
+ */
 @Composable
 fun M3InlineSpinner(
     modifier: Modifier = Modifier,
-    size: Dp = 20.dp,
+    size: Dp = 22.dp,
     color: Color = AppColors.Primary
 ) {
-    CircularProgressIndicator(
-        modifier = modifier.size(size),
-        color = color,
-        trackColor = color.copy(alpha = 0.2f),
-        strokeWidth = 2.2.dp,
-        strokeCap = StrokeCap.Round
+    M3ExpressiveLoadingIndicator(
+        modifier = modifier,
+        size = size,
+        color = color
     )
 }
 
@@ -119,8 +246,7 @@ fun buildCoilRequest(
 }
 
 /**
- * Clean anchored bottom navigation bar (non-floating), YouTube / CloudStream / Metrolist style:
- * pure dark surface, hairline top divider, crisp white selected icon, zero glass pills.
+ * Clean anchored bottom navigation bar (non-floating), soft charcoal dark surface.
  */
 @Composable
 fun AppBottomBar(
@@ -176,144 +302,72 @@ fun AppBottomBar(
 }
 
 /**
- * Architectural Inverted-Fillet / Corner Cutout Shape for poster art.
- * Carves clean concave notches ONLY on corners where badge data exists,
- * so metadata integrates directly into the card's silhouette rather than floating over art.
+ * Draws a crisp concave inverted-fillet flare matching the notch background color.
+ * cornerPosition:
+ *  - "TR_LEFT": flare to the left of a Top-Right notch (concave faces bottom-left)
+ *  - "TR_BOTTOM": flare below a Top-Right notch (concave faces bottom-left)
+ *  - "BL_TOP": flare above a Bottom-Left notch (concave faces top-right)
+ *  - "BL_RIGHT": flare to the right of a Bottom-Left notch (concave faces top-right)
  */
-private fun notchedPosterShape(
-    cornerRadiusPx: Float,
-    notchRadiusPx: Float,
-    topLeftNotchW: Float,
-    topLeftNotchH: Float,
-    topRightNotchW: Float,
-    topRightNotchH: Float,
-    bottomLeftNotchW: Float,
-    bottomLeftNotchH: Float
-): Shape = GenericShape { size, _ ->
-    val w = size.width
-    val h = size.height
-    val r = min(cornerRadiusPx, min(w, h) / 4f)
-    val nr = min(notchRadiusPx, r)
-
-    // Clamp notch dimensions safely so adjacent corners never collide
-    val tlW = if (topLeftNotchW > 0f && topLeftNotchH > 0f) min(topLeftNotchW, w * 0.46f) else 0f
-    val tlH = if (tlW > 0f) min(topLeftNotchH, h * 0.25f) else 0f
-
-    val trW = if (topRightNotchW > 0f && topRightNotchH > 0f) min(topRightNotchW, w * 0.46f) else 0f
-    val trH = if (trW > 0f) min(topRightNotchH, h * 0.25f) else 0f
-
-    val blW = if (bottomLeftNotchW > 0f && bottomLeftNotchH > 0f) min(bottomLeftNotchW, w * 0.78f) else 0f
-    val blH = if (blW > 0f) min(bottomLeftNotchH, h * 0.25f) else 0f
-
-    // Start along top edge
-    if (tlW > 0f) {
-        moveTo(tlW + nr, 0f)
-    } else {
-        moveTo(r, 0f)
+@Composable
+private fun ConcaveCornerFlare(
+    flareSize: Dp,
+    bgColor: Color,
+    concaveAtBottomLeft: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier.size(flareSize)) {
+        val s = this.size.minDimension
+        val path = Path()
+        if (concaveAtBottomLeft) {
+            // Solid corner sits at Top-Right; concave curve faces Bottom-Left
+            path.moveTo(0f, 0f)
+            path.lineTo(s, 0f)
+            path.lineTo(s, s)
+            path.quadraticTo(s, 0f, 0f, 0f)
+        } else {
+            // Solid corner sits at Bottom-Left; concave curve faces Top-Right
+            path.moveTo(0f, 0f)
+            path.lineTo(0f, s)
+            path.lineTo(s, s)
+            path.quadraticTo(0f, s, 0f, 0f)
+        }
+        path.close()
+        drawPath(path = path, color = bgColor)
     }
-
-    // Top-right corner
-    if (trW > 0f) {
-        val xCut = w - trW
-        lineTo(xCut - nr, 0f)
-        // Convex outer fillet into vertical drop
-        arcTo(Rect(xCut - 2 * nr, 0f, xCut, 2 * nr), -90f, 90f, false)
-        lineTo(xCut, trH - nr)
-        // Concave inner corner turning right
-        arcTo(Rect(xCut, trH - 2 * nr, xCut + 2 * nr, trH), 180f, -90f, false)
-        lineTo(w - nr, trH)
-        // Convex fillet turning down along right edge
-        arcTo(Rect(w - 2 * nr, trH, w, trH + 2 * nr), -90f, 90f, false)
-    } else {
-        lineTo(w - r, 0f)
-        arcTo(Rect(w - 2 * r, 0f, w, 2 * r), -90f, 90f, false)
-    }
-
-    // Right edge -> Bottom-right smooth corner
-    lineTo(w, h - r)
-    arcTo(Rect(w - 2 * r, h - 2 * r, w, h), 0f, 90f, false)
-
-    // Bottom edge -> Bottom-left corner (optional SUB/DUB cutout)
-    if (blW > 0f) {
-        lineTo(blW + nr, h)
-        // Convex fillet going up into notch
-        arcTo(Rect(blW, h - 2 * nr, blW + 2 * nr, h), 90f, 90f, false)
-        lineTo(blW, h - blH + nr)
-        // Concave inner corner turning left
-        arcTo(Rect(blW - 2 * nr, h - blH, blW, h - blH + 2 * nr), 0f, -90f, false)
-        lineTo(nr, h - blH)
-        // Convex fillet turning up along left edge
-        arcTo(Rect(0f, h - blH - 2 * nr, 2 * nr, h - blH), 90f, 90f, false)
-    } else {
-        lineTo(r, h)
-        arcTo(Rect(0f, h - 2 * r, 2 * r, h), 90f, 90f, false)
-    }
-
-    // Left edge -> Top-left corner (optional rating cutout)
-    if (tlW > 0f) {
-        lineTo(0f, tlH + nr)
-        // Convex fillet turning right into notch
-        arcTo(Rect(0f, tlH, 2 * nr, tlH + 2 * nr), 180f, 90f, false)
-        lineTo(tlW - nr, tlH)
-        // Concave inner corner turning up
-        arcTo(Rect(tlW - 2 * nr, tlH - 2 * nr, tlW, tlH), 90f, -90f, false)
-        lineTo(tlW, nr)
-        // Convex fillet returning to top edge
-        arcTo(Rect(tlW, 0f, tlW + 2 * nr, 2 * nr), 180f, 90f, false)
-    } else {
-        lineTo(0f, r)
-        arcTo(Rect(0f, 0f, 2 * r, 2 * r), 180f, 90f, false)
-    }
-
-    close()
 }
 
 /**
- * Notched Corner-Cutout Poster Card:
- * Dynamically carves inverted-radius corner cutouts ONLY for metadata returned by the provider
- * (Rating top-left, Type/Quality top-right, Sub/Dub or Episode count bottom-left).
+ * Refined Cutout / Concave-Flare Poster Card:
+ * - Rounded poster art with seamless background-colored corner notches & concave flares
+ * - Top-Right notch (only if score exists): warm gold rating pill with star icon
+ * - Bottom-Left notch (only if sub/dub/ep/type exists): stacked colored pills (CC sub + Mic dub joined pair, crimson type pill)
  */
 @Composable
 fun PosterCard(
     item: MediaCardItem,
     modifier: Modifier = Modifier,
     forceHorizontal: Boolean = false,
+    notchBgColor: Color = AppColors.Background,
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val density = LocalDensity.current
     val horizontal = forceHorizontal || item.isHorizontal
     val aspectRatio = if (horizontal) 16f / 9f else 2f / 3f
 
     val ratingText = item.score?.takeIf { it.isNotBlank() }
     val typeText = item.shortType.takeIf { it.isNotBlank() }
+        ?: item.type.takeIf { it.isNotBlank() }?.uppercase()?.take(7)
         ?: item.quality?.takeIf { it.isNotBlank() }
-        ?: item.type.takeIf { it.isNotBlank() }?.uppercase()?.take(6)
 
-    val hasBottomData = item.hasSub || item.hasDub || (item.episodeCount != null && item.episodeCount > 0)
+    val hasAudioOrEp = item.hasSub || item.hasDub || (item.episodeCount != null && item.episodeCount > 0)
+    val hasBottomNotch = hasAudioOrEp || typeText != null
 
-    var tlSize by remember(ratingText) { mutableStateOf(IntSize.Zero) }
-    var trSize by remember(typeText) { mutableStateOf(IntSize.Zero) }
-    var blSize by remember(item.hasSub, item.hasDub, item.subEpisodes, item.dubEpisodes, item.episodeCount) {
-        mutableStateOf(IntSize.Zero)
-    }
-
-    val cornerPx = with(density) { 12.dp.toPx() }
-    val notchPx = with(density) { 8.dp.toPx() }
-    val gapPx = with(density) { 4.dp.toPx() }
-
-    val posterShape = remember(tlSize, trSize, blSize, cornerPx, notchPx) {
-        notchedPosterShape(
-            cornerRadiusPx = cornerPx,
-            notchRadiusPx = notchPx,
-            topLeftNotchW = if (tlSize.width > 0) tlSize.width + gapPx else 0f,
-            topLeftNotchH = if (tlSize.height > 0) tlSize.height + gapPx else 0f,
-            topRightNotchW = if (trSize.width > 0) trSize.width + gapPx else 0f,
-            topRightNotchH = if (trSize.height > 0) trSize.height + gapPx else 0f,
-            bottomLeftNotchW = if (blSize.width > 0) blSize.width + gapPx else 0f,
-            bottomLeftNotchH = if (blSize.height > 0) blSize.height + gapPx else 0f
-        )
-    }
+    val cardRadius = 14.dp
+    val notchGap = 3.dp
+    val flareSize = 10.dp
+    val badgeHeight = 17.dp
+    val innerCutRadius = 11.dp
 
     Column(
         modifier = modifier.clickable(
@@ -326,11 +380,11 @@ fun PosterCard(
                 .fillMaxWidth()
                 .aspectRatio(aspectRatio)
         ) {
-            // Poster image clipped to the dynamic corner-cutout shape
+            // Base rounded poster image
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .clip(posterShape)
+                    .clip(RoundedCornerShape(cardRadius))
                     .background(AppColors.SurfaceCard),
                 contentAlignment = Alignment.Center
             ) {
@@ -351,86 +405,210 @@ fun PosterCard(
                 }
             }
 
-            // Top-Left Cutout Slot: Rating
+            // Top-Right Concave Rating Notch (only when rating exists)
             if (ratingText != null) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .onSizeChanged { tlSize = it }
-                        .padding(end = 3.dp, bottom = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier.align(Alignment.TopEnd),
+                    horizontalAlignment = Alignment.End
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.Star,
-                        contentDescription = null,
-                        tint = AppColors.Gold,
-                        modifier = Modifier.size(11.dp)
-                    )
-                    Spacer(modifier = Modifier.width(2.dp))
-                    Text(
-                        text = ratingText,
-                        color = AppColors.TextPrimary,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1
+                    Row(verticalAlignment = Alignment.Top) {
+                        ConcaveCornerFlare(
+                            flareSize = flareSize,
+                            bgColor = notchBgColor,
+                            concaveAtBottomLeft = true
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(bottomStart = innerCutRadius))
+                                .background(notchBgColor)
+                                .padding(start = notchGap, bottom = notchGap)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .height(badgeHeight)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(AppColors.Gold)
+                                    .padding(horizontal = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Star,
+                                    contentDescription = null,
+                                    tint = AppColors.OnGold,
+                                    modifier = Modifier.size(9.dp)
+                                )
+                                Text(
+                                    text = ratingText,
+                                    color = AppColors.OnGold,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    lineHeight = 9.sp,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                    ConcaveCornerFlare(
+                        flareSize = flareSize,
+                        bgColor = notchBgColor,
+                        concaveAtBottomLeft = true
                     )
                 }
             }
 
-            // Top-Right Cutout Slot: Type (MOVIE / TV / ANIME / etc.)
-            if (typeText != null) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .onSizeChanged { trSize = it }
-                        .padding(start = 3.dp, bottom = 2.dp)
+            // Bottom-Left Concave Info Notch (Sub/Dub/EP + Type pills — only when data exists)
+            if (hasBottomNotch) {
+                Column(
+                    modifier = Modifier.align(Alignment.BottomStart),
+                    horizontalAlignment = Alignment.Start
                 ) {
-                    Text(
-                        text = typeText,
-                        color = AppColors.TextSecondary,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 0.5.sp,
-                        maxLines = 1
+                    ConcaveCornerFlare(
+                        flareSize = flareSize,
+                        bgColor = notchBgColor,
+                        concaveAtBottomLeft = false
                     )
-                }
-            }
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(topEnd = innerCutRadius))
+                                .background(notchBgColor)
+                                .padding(top = notchGap, end = notchGap)
+                        ) {
+                            Column(
+                                modifier = Modifier.width(IntrinsicSize.Max),
+                                verticalArrangement = Arrangement.spacedBy(2.5.dp)
+                            ) {
+                                if (hasAudioOrEp) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(2.5.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        val bothAudio = item.hasSub && item.hasDub
+                                        if (item.hasSub) {
+                                            val subShape = if (bothAudio) {
+                                                RoundedCornerShape(
+                                                    topStart = 9.dp, bottomStart = 9.dp,
+                                                    topEnd = 3.dp, bottomEnd = 3.dp
+                                                )
+                                            } else {
+                                                RoundedCornerShape(50)
+                                            }
+                                            Row(
+                                                modifier = Modifier
+                                                    .weight(1f, fill = bothAudio)
+                                                    .height(badgeHeight)
+                                                    .clip(subShape)
+                                                    .background(AppColors.SubPill)
+                                                    .padding(horizontal = 5.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = AppIcons.ClosedCaption,
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(9.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(2.dp))
+                                                Text(
+                                                    text = item.subEpisodes?.toString() ?: "SUB",
+                                                    color = Color.White,
+                                                    fontSize = 8.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    lineHeight = 8.sp,
+                                                    maxLines = 1
+                                                )
+                                            }
+                                        }
+                                        if (item.hasDub) {
+                                            val dubShape = if (bothAudio) {
+                                                RoundedCornerShape(
+                                                    topStart = 3.dp, bottomStart = 3.dp,
+                                                    topEnd = 9.dp, bottomEnd = 9.dp
+                                                )
+                                            } else {
+                                                RoundedCornerShape(50)
+                                            }
+                                            Row(
+                                                modifier = Modifier
+                                                    .weight(1f, fill = bothAudio)
+                                                    .height(badgeHeight)
+                                                    .clip(dubShape)
+                                                    .background(AppColors.DubPill)
+                                                    .padding(horizontal = 5.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = AppIcons.Mic,
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(9.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(2.dp))
+                                                Text(
+                                                    text = item.dubEpisodes?.toString() ?: "DUB",
+                                                    color = Color.White,
+                                                    fontSize = 8.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    lineHeight = 8.sp,
+                                                    maxLines = 1
+                                                )
+                                            }
+                                        }
+                                        if (!item.hasSub && !item.hasDub && item.episodeCount != null) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(badgeHeight)
+                                                    .clip(RoundedCornerShape(50))
+                                                    .background(AppColors.EpisodePill)
+                                                    .padding(horizontal = 6.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "EP ${item.episodeCount}",
+                                                    color = AppColors.TextPrimary,
+                                                    fontSize = 8.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    lineHeight = 8.sp,
+                                                    maxLines = 1
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
 
-            // Bottom-Left Cutout Slot: SUB / DUB / Episodes
-            if (hasBottomData) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .onSizeChanged { blSize = it }
-                        .padding(top = 2.dp, end = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    if (item.hasSub) {
-                        Text(
-                            text = if (item.subEpisodes != null) "SUB ${item.subEpisodes}" else "SUB",
-                            color = AppColors.SubGreen,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1
-                        )
-                    }
-                    if (item.hasDub) {
-                        Text(
-                            text = if (item.dubEpisodes != null) "DUB ${item.dubEpisodes}" else "DUB",
-                            color = AppColors.DubBlue,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1
-                        )
-                    }
-                    if (!item.hasSub && !item.hasDub && item.episodeCount != null) {
-                        Text(
-                            text = "EP ${item.episodeCount}",
-                            color = AppColors.TextSecondary,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
+                                if (typeText != null) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .defaultMinSize(minWidth = 44.dp)
+                                            .height(16.dp)
+                                            .clip(RoundedCornerShape(50))
+                                            .background(AppColors.TypePill)
+                                            .padding(horizontal = 7.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = typeText,
+                                            color = Color.White,
+                                            fontSize = 7.5.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            letterSpacing = 0.5.sp,
+                                            lineHeight = 8.sp,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        ConcaveCornerFlare(
+                            flareSize = flareSize,
+                            bgColor = notchBgColor,
+                            concaveAtBottomLeft = false
                         )
                     }
                 }
@@ -443,12 +621,125 @@ fun PosterCard(
             text = item.title,
             color = AppColors.TextPrimary,
             fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
+            fontWeight = FontWeight.SemiBold,
             lineHeight = 16.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 2.dp)
         )
+    }
+}
+
+/**
+ * Episode Thumbnail with matching Concave Corner Cutout for Episode Number (and optional Rating).
+ */
+@Composable
+fun NotchedEpisodeThumbnail(
+    imageUrl: String?,
+    headers: Map<String, String>,
+    episodeNumber: Int?,
+    score: String? = null,
+    notchBgColor: Color = AppColors.Background,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val flareSize = 8.dp
+    val notchGap = 2.5.dp
+
+    Box(modifier = modifier.aspectRatio(16f / 9f)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(11.dp))
+                .background(AppColors.SurfaceCard),
+            contentAlignment = Alignment.Center
+        ) {
+            if (!imageUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = buildCoilRequest(context, imageUrl, headers),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Icon(AppIcons.Movie, null, tint = AppColors.TextMuted, modifier = Modifier.size(22.dp))
+            }
+        }
+
+        // Optional Top-Right Score Cutout
+        if (!score.isNullOrBlank()) {
+            Column(
+                modifier = Modifier.align(Alignment.TopEnd),
+                horizontalAlignment = Alignment.End
+            ) {
+                Row(verticalAlignment = Alignment.Top) {
+                    ConcaveCornerFlare(flareSize = flareSize, bgColor = notchBgColor, concaveAtBottomLeft = true)
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(bottomStart = 9.dp))
+                            .background(notchBgColor)
+                            .padding(start = notchGap, bottom = notchGap)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .height(16.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(AppColors.Gold)
+                                .padding(horizontal = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Icon(Icons.Filled.Star, null, tint = AppColors.OnGold, modifier = Modifier.size(8.dp))
+                            Text(
+                                text = score,
+                                color = AppColors.OnGold,
+                                fontSize = 8.5.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                lineHeight = 9.sp
+                            )
+                        }
+                    }
+                }
+                ConcaveCornerFlare(flareSize = flareSize, bgColor = notchBgColor, concaveAtBottomLeft = true)
+            }
+        }
+
+        // Bottom-Left Episode Number Cutout
+        if (episodeNumber != null) {
+            Column(
+                modifier = Modifier.align(Alignment.BottomStart),
+                horizontalAlignment = Alignment.Start
+            ) {
+                ConcaveCornerFlare(flareSize = flareSize, bgColor = notchBgColor, concaveAtBottomLeft = false)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(topEnd = 9.dp))
+                            .background(notchBgColor)
+                            .padding(top = notchGap, end = notchGap)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .height(17.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(AppColors.EpisodePill)
+                                .padding(horizontal = 7.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "EP $episodeNumber",
+                                color = AppColors.TextPrimary,
+                                fontSize = 8.5.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = 0.3.sp,
+                                lineHeight = 9.sp
+                            )
+                        }
+                    }
+                    ConcaveCornerFlare(flareSize = flareSize, bgColor = notchBgColor, concaveAtBottomLeft = false)
+                }
+            }
+        }
     }
 }
 
@@ -474,7 +765,7 @@ fun MediaListRowCard(
                 modifier = Modifier
                     .width(56.dp)
                     .aspectRatio(2f / 3f)
-                    .clip(RoundedCornerShape(7.dp))
+                    .clip(RoundedCornerShape(8.dp))
                     .background(AppColors.SurfaceCard),
                 contentAlignment = Alignment.Center
             ) {
@@ -516,6 +807,10 @@ fun MediaListRowCard(
                     val subline = listOfNotNull(
                         item.type.takeIf { it.isNotBlank() },
                         item.year?.takeIf { it > 0 }?.toString(),
+                        if (item.hasSub && item.hasDub) "Sub & Dub"
+                        else if (item.hasSub) "Sub"
+                        else if (item.hasDub) "Dub"
+                        else null,
                         item.apiName.takeIf { it.isNotBlank() }
                     ).joinToString(" • ")
                     if (subline.isNotBlank()) {
@@ -585,7 +880,7 @@ fun EmptyNoProvidersView(
                 onClick = onOpenProviders,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = AppColors.Primary,
-                    contentColor = Color.Black
+                    contentColor = AppColors.OnPrimary
                 ),
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.height(46.dp)
@@ -640,9 +935,9 @@ fun ErrorStateView(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProviderPickerSheet(
-    providers: List<MainAPI>,
-    activeProvider: MainAPI?,
-    onSelect: (MainAPI) -> Unit,
+    providers: List<ProviderEntry>,
+    activeProvider: ProviderEntry?,
+    onSelect: (ProviderEntry) -> Unit,
     onManageProviders: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -673,7 +968,7 @@ fun ProviderPickerSheet(
                     onDismiss()
                     onManageProviders()
                 }) {
-                    Text("Manage", color = AppColors.TextPrimary, fontWeight = FontWeight.SemiBold)
+                    Text("Manage", color = AppColors.Primary, fontWeight = FontWeight.SemiBold)
                 }
             }
 
@@ -683,13 +978,13 @@ fun ProviderPickerSheet(
             LazyColumn(
                 modifier = Modifier.heightIn(max = 380.dp)
             ) {
-                items(providers, key = { it.name }) { api ->
-                    val isSelected = activeProvider?.name == api.name
+                items(providers, key = { it.key }) { entry ->
+                    val isSelected = activeProvider?.key == entry.key
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                onSelect(api)
+                                onSelect(entry)
                                 onDismiss()
                             }
                             .padding(horizontal = 20.dp, vertical = 14.dp),
@@ -697,14 +992,15 @@ fun ProviderPickerSheet(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = api.name,
+                                text = entry.displayName,
                                 color = if (isSelected) AppColors.Primary else AppColors.TextPrimary,
                                 fontSize = 15.sp,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                             )
                             val meta = listOfNotNull(
-                                api.lang.uppercase().takeIf { it.isNotBlank() },
-                                api.supportedTypes.take(3).joinToString(" • ") { it.name }.takeIf { it.isNotBlank() }
+                                if (entry.isDuplicateName) entry.sourceLabel else null,
+                                entry.api.lang.uppercase().takeIf { it.isNotBlank() },
+                                entry.api.supportedTypes.take(3).joinToString(" • ") { it.name }.takeIf { it.isNotBlank() }
                             ).joinToString("  •  ")
                             if (meta.isNotBlank()) {
                                 Spacer(modifier = Modifier.height(2.dp))

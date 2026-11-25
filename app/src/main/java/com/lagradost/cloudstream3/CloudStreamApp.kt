@@ -57,10 +57,12 @@ class ExceptionHandler(
 
 class CloudStreamApp : Application(), SingletonImageLoader.Factory {
 
+    @OptIn(UnsafeSSL::class)
     override fun onCreate() {
         super.onCreate()
         context = this
         runCatching { app.initClient(this) }
+        runCatching { insecureApp.initClient(this, ignoreSSL = true) }
         AppDebug.isDebug = BuildConfig.DEBUG
     }
 

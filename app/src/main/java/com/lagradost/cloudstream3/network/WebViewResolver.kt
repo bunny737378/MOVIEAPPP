@@ -6,6 +6,7 @@ import android.net.http.SslError
 import android.webkit.*
 import com.lagradost.api.Log
 import com.lagradost.api.getContext
+import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.mvvm.debugException
@@ -23,6 +24,8 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.Interceptor
 import okhttp3.Request
 import okhttp3.Response
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * When used as Interceptor additionalUrls cannot be returned, use WebViewResolver(...).resolveUsingWebView(...)
@@ -33,7 +36,7 @@ import okhttp3.Response
  * @param script pass custom js to execute
  * @param scriptCallback will be called with the result from custom js
  * @param timeout close webview after timeout
- * */
+ */
 class WebViewResolver(
     val interceptUrl: Regex,
     val additionalUrls: List<Regex> = emptyList(),
@@ -42,24 +45,36 @@ class WebViewResolver(
     val script: String? = null,
     val scriptCallback: ((String) -> Unit)? = null,
     val timeout: Long = DEFAULT_TIMEOUT
-) :
-    Interceptor {
+) : Interceptor {
 
     companion object {
+        @Volatile
         var webViewUserAgent: String? = null
         val DEFAULT_TIMEOUT = 60_000L
         private const val TAG = "WebViewResolver"
 
+        private fun resolveContext(): Context? {
+            return CommonActivity.activity ?: (getContext() as? Context)
+        }
+
         @JvmName("getWebViewUserAgent1")
         fun getWebViewUserAgent(): String? {
-            return webViewUserAgent ?: (getContext() as? Context)?.let { ctx ->
-                runBlocking {
-                    mainWork {
-                        WebView(ctx).settings.userAgentString.also { userAgent ->
-                            webViewUserAgent = userAgent
+            return webViewUserAgent ?: resolveContext()?.let { ctx ->
+                runCatching {
+                    WebSettings.getDefaultUserAgent(ctx).also { ua ->
+                        webViewUserAgent = ua
+                    }
+                }.getOrNull() ?: runCatching {
+                    runBlocking {
+                        mainWork {
+                            val wv = WebView(ctx)
+                            val ua = wv.settings.userAgentString
+                            wv.destroy()
+                            webViewUserAgent = ua
+                            ua
                         }
                     }
-                }
+                }.getOrNull()
             }
         }
     }
@@ -106,140 +121,130 @@ class WebViewResolver(
         val url = request.url.toString()
         val headers = request.headers
         Log.i(TAG, "Initial web-view request: $url")
-        var webView: WebView? = null
-        // Extra assurance it exits as it should.
-        var shouldExit = false
+        val webViewRef = AtomicReference<WebView?>(null)
+        val shouldExit = AtomicBoolean(false)
+        val destroyed = AtomicBoolean(false)
 
         fun destroyWebView() {
+            if (!destroyed.compareAndSet(false, true)) return
+            shouldExit.set(true)
             main {
-                webView?.stopLoading()
-                webView?.destroy()
-                webView = null
-                shouldExit = true
+                runCatching {
+                    val wv = webViewRef.getAndSet(null)
+                    wv?.stopLoading()
+                    wv?.onPause()
+                    wv?.destroy()
+                }
                 Log.i(TAG, "Destroyed webview")
             }
         }
 
-        var fixedRequest: Request? = null
+        val fixedRequest = AtomicReference<Request?>(null)
         val extraRequestList = atomicListOf<Request>()
 
         main {
             try {
-                webView = WebView(
-                    (getContext() as? Context)
-                        ?: throw RuntimeException("No base context in WebViewResolver")
-                ).apply {
-                    // Bare minimum to bypass captcha
+                val ctx = resolveContext()
+                    ?: throw RuntimeException("No base context in WebViewResolver")
+
+                val createdWebView = WebView(ctx).apply {
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
+                    settings.databaseEnabled = true
+                    settings.javaScriptCanOpenWindowsAutomatically = true
+                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    settings.loadsImagesAutomatically = !useOkhttp
 
                     webViewUserAgent = settings.userAgentString
-                    // Don't set user agent, setting user agent will make cloudflare break.
+                    // Don't override user agent when null (Cloudflare validates native WebView UA)
                     if (userAgent != null) {
                         settings.userAgentString = userAgent
                     }
-                    // Blocks unnecessary images, remove if captcha fucks.
-//                    settings.blockNetworkImage = true
+                    // Give the headless WebView realistic viewport dimensions so JS challenges run reliably
+                    layout(0, 0, 1080, 1920)
+                    onResume()
+                }
+                webViewRef.set(createdWebView)
+
+                safe {
+                    val cm = CookieManager.getInstance()
+                    cm.setAcceptCookie(true)
+                    cm.setAcceptThirdPartyCookies(createdWebView, true)
                 }
 
-                webView?.webViewClient = object : WebViewClient() {
+                createdWebView.webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView?, finishedUrl: String?) {
+                        super.onPageFinished(view, finishedUrl)
+                        safe { CookieManager.getInstance().flush() }
+                        if (!shouldExit.get() && requestCallBack(request)) {
+                            destroyWebView()
+                        }
+                    }
+
                     override fun shouldInterceptRequest(
                         view: WebView,
-                        request: WebResourceRequest
+                        webResourceRequest: WebResourceRequest
                     ): WebResourceResponse? = runBlocking {
-                        val webViewUrl = request.url.toString()
+                        if (shouldExit.get()) return@runBlocking null
+                        val webViewUrl = webResourceRequest.url.toString()
                         Log.i(TAG, "Loading WebView URL: $webViewUrl")
 
                         if (script != null) {
                             runOnMainThread {
-                                view.evaluateJavascript(script)
-                                { scriptCallback?.invoke(it) }
+                                view.evaluateJavascript(script) { scriptCallback?.invoke(it) }
                             }
                         }
 
                         if (interceptUrl.containsMatchIn(webViewUrl)) {
-                            fixedRequest = request.toRequest()?.also {
-                                requestCallBack(it)
-                            }
+                            fixedRequest.set(
+                                webResourceRequest.toRequest()?.also {
+                                    requestCallBack(it)
+                                }
+                            )
                             Log.i(TAG, "Web-view request finished: $webViewUrl")
                             destroyWebView()
                             return@runBlocking null
                         }
 
                         if (additionalUrls.any { it.containsMatchIn(webViewUrl) }) {
-                            request.toRequest()?.also {
+                            webResourceRequest.toRequest()?.also {
                                 if (requestCallBack(it)) destroyWebView()
                             }?.let(extraRequestList::add)
                         }
 
-                        // Suppress image requests as we don't display them anywhere
-                        // Less data, low chance of causing issues.
-                        // blockNetworkImage also does this job but i will keep it for the future.
+                        // When useOkhttp == false (e.g. Cloudflare challenge), let WebView load everything natively
+                        if (!useOkhttp) {
+                            return@runBlocking super.shouldInterceptRequest(view, webResourceRequest)
+                        }
+
                         val blacklistedFiles = listOf(
-                            ".jpg",
-                            ".png",
-                            ".webp",
-                            ".mpg",
-                            ".mpeg",
-                            ".jpeg",
-                            ".webm",
-                            ".mp4",
-                            ".mp3",
-                            ".gifv",
-                            ".flv",
-                            ".asf",
-                            ".mov",
-                            ".mng",
-                            ".mkv",
-                            ".ogg",
-                            ".avi",
-                            ".wav",
-                            ".woff2",
-                            ".woff",
-                            ".ttf",
-                            ".css",
-                            ".vtt",
-                            ".srt",
-                            ".ts",
-                            ".gif",
-                            // Warning, this might fuck some future sites, but it's used to make Sflix work.
-                            "wss://"
+                            ".jpg", ".png", ".webp", ".mpg", ".mpeg", ".jpeg", ".webm",
+                            ".mp4", ".mp3", ".gifv", ".flv", ".asf", ".mov", ".mng",
+                            ".mkv", ".ogg", ".avi", ".wav", ".woff2", ".woff", ".ttf",
+                            ".css", ".vtt", ".srt", ".ts", ".gif", "wss://"
                         )
 
-                        /** NOTE!  request.requestHeaders is not perfect!
-                         *  They don't contain all the headers the browser actually gives.
-                         *  Overriding with okhttp might fuck up otherwise working requests,
-                         *  e.g the recaptcha request.
-                         * */
                         return@runBlocking try {
                             when {
-                                blacklistedFiles.any { Url(webViewUrl).encodedPath.decodeURLPart().contains(it) } || webViewUrl.endsWith(
-                                    "/favicon.ico"
-                                ) -> WebResourceResponse(
-                                    "image/png",
-                                    null,
-                                    null
+                                blacklistedFiles.any { Url(webViewUrl).encodedPath.decodeURLPart().contains(it) } ||
+                                    webViewUrl.endsWith("/favicon.ico") -> WebResourceResponse(
+                                    "image/png", null, null,
                                 )
 
-                                webViewUrl.contains("recaptcha") || webViewUrl.contains("/cdn-cgi/") -> super.shouldInterceptRequest(
-                                    view,
-                                    request
-                                )
+                                webViewUrl.contains("recaptcha") || webViewUrl.contains("/cdn-cgi/") ->
+                                    super.shouldInterceptRequest(view, webResourceRequest)
 
-                                useOkhttp && request.method == "GET" -> app.get(
+                                webResourceRequest.method == "GET" -> app.get(
                                     webViewUrl,
-                                    headers = request.requestHeaders
+                                    headers = webResourceRequest.requestHeaders
                                 ).okhttpResponse.toWebResourceResponse()
 
-                                useOkhttp && request.method == "POST" -> app.post(
+                                webResourceRequest.method == "POST" -> app.post(
                                     webViewUrl,
-                                    headers = request.requestHeaders
+                                    headers = webResourceRequest.requestHeaders
                                 ).okhttpResponse.toWebResourceResponse()
 
-                                else -> super.shouldInterceptRequest(
-                                    view,
-                                    request
-                                )
+                                else -> super.shouldInterceptRequest(view, webResourceRequest)
                             }
                         } catch (_: Exception) {
                             null
@@ -252,40 +257,47 @@ class WebViewResolver(
                         handler: SslErrorHandler?,
                         error: SslError?
                     ) {
-                        handler?.proceed() // Ignore ssl issues
+                        handler?.proceed()
                     }
                 }
-                webView?.loadUrl(url, headers.toMap())
+                createdWebView.loadUrl(url, headers.toMap())
             } catch (e: Exception) {
                 logError(e)
+                shouldExit.set(true)
             }
         }
 
-        var loop = 0
-        // Timeouts after this amount, 60s
         val totalTime = timeout
+        val delayTime = 150L
+        var loop = 0
 
-        val delayTime = 100L
-
-        // A bit sloppy, but couldn't find a better way
-        while (loop < totalTime / delayTime && !shouldExit) {
-            if (fixedRequest != null) return fixedRequest to extraRequestList
-            delay(delayTime)
-            loop += 1
+        try {
+            while (loop < totalTime / delayTime && !shouldExit.get()) {
+                val found = fixedRequest.get()
+                if (found != null) return found to extraRequestList
+                // Periodically poll callback (catches cf_clearance cookies set via JS without navigation)
+                if (!useOkhttp && loop > 0 && loop % 4 == 0) {
+                    if (runCatching { requestCallBack(request) }.getOrDefault(false)) {
+                        break
+                    }
+                }
+                delay(delayTime)
+                loop += 1
+            }
+            if (!shouldExit.get()) {
+                Log.i(TAG, "Web-view timeout after ${totalTime / 1000}s")
+            }
+        } finally {
+            // Always clean up WebView even if the parent coroutine is cancelled!
+            destroyWebView()
         }
 
-        Log.i(TAG, "Web-view timeout after ${totalTime / 1000}s")
-        destroyWebView()
-        return fixedRequest to extraRequestList
+        return fixedRequest.get() to extraRequestList
     }
 }
 
 fun WebResourceRequest.toRequest(): Request? {
     val webViewUrl = this.url.toString()
-
-    // If invalid url then it can crash with
-    // java.lang.IllegalArgumentException: Expected URL scheme 'http' or 'https' but was 'data'
-    // At Request.Builder().url(addParamsToUrl(url, params))
     return safe {
         requestCreator(
             this.method,
@@ -297,7 +309,6 @@ fun WebResourceRequest.toRequest(): Request? {
 
 fun Response.toWebResourceResponse(): WebResourceResponse {
     val contentTypeValue = this.header("Content-Type")
-    // 1. contentType. 2. charset
     val typeRegex = Regex("""(.*);(?:.*charset=(.*)(?:|;)|)""")
     return if (contentTypeValue != null) {
         val found = typeRegex.find(contentTypeValue)

@@ -6,36 +6,45 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
 /**
- * True OLED cinema-neutral dark palette inspired by native Android media apps
- * (CloudStream, YouTube, Prime Video, Metrolist) — zero blue-slate tint or glassmorphism.
+ * Refined neutral dark charcoal-grey palette inspired by YouTube Dark, Metrolist, and CloudStream —
+ * softer than pitch OLED black, zero generic blue-slate cast or glassmorphism.
  */
 object AppColors {
-    val Background = Color(0xFF000000)
-    val Surface = Color(0xFF0E0E10)
-    val SurfaceCard = Color(0xFF161619)
-    val SurfaceElevated = Color(0xFF1F1F24)
-    val NavBarBg = Color(0xFF08080A)
-    val Divider = Color(0xFF222227)
-    val Border = Color(0xFF27272D)
-    val BorderStrong = Color(0xFF3A3A42)
+    val Background = Color(0xFF121215)
+    val Surface = Color(0xFF1A1A1F)
+    val SurfaceCard = Color(0xFF23232A)
+    val SurfaceElevated = Color(0xFF2C2C35)
+    val NavBarBg = Color(0xFF16161B)
+    val Divider = Color(0xFF2A2A32)
+    val Border = Color(0xFF34343E)
+    val BorderStrong = Color(0xFF474754)
 
-    val Primary = Color(0xFFFFFFFF)
-    val Accent = Color(0xFFE53935)
-    val Gold = Color(0xFFF5C518)
+    val Primary = Color(0xFFF5F5F7)
+    val OnPrimary = Color(0xFF121215)
+    val Accent = Color(0xFFD92632)
+
+    // Poster cutout badge accents (high-contrast, balanced)
+    val Gold = Color(0xFFF5BE18)
+    val OnGold = Color(0xFF161209)
+    val SubPill = Color(0xFF6E54E8)
+    val DubPill = Color(0xFF0E9686)
+    val TypePill = Color(0xFFD92632)
+    val EpisodePill = Color(0xFF2F2F3B)
+
     val SubGreen = Color(0xFF4ADE80)
     val DubBlue = Color(0xFF60A5FA)
     val Success = Color(0xFF34D399)
     val Warning = Color(0xFFFBBF24)
     val Danger = Color(0xFFEF4444)
 
-    val TextPrimary = Color(0xFFF5F5F7)
-    val TextSecondary = Color(0xFFA1A1AA)
-    val TextMuted = Color(0xFF71717A)
+    val TextPrimary = Color(0xFFF4F4F6)
+    val TextSecondary = Color(0xFFA8A8B3)
+    val TextMuted = Color(0xFF787885)
 }
 
 private val NativeDarkScheme = darkColorScheme(
     primary = AppColors.Primary,
-    onPrimary = Color(0xFF000000),
+    onPrimary = AppColors.OnPrimary,
     secondary = AppColors.Accent,
     onSecondary = Color.White,
     background = AppColors.Background,

@@ -44,14 +44,13 @@ import com.lagradost.cloudstream3.ui.settings.extensions.RepositoryData
 import com.xtsream.app.engine.AddSourceResult
 import com.xtsream.app.engine.ExtensionController
 import com.xtsream.app.engine.InstalledExtensionInfo
+import com.xtsream.app.engine.ProviderEntry
 import com.xtsream.app.ui.components.AppIcons
+import com.xtsream.app.ui.components.AppToastManager
 import com.xtsream.app.ui.components.M3InlineSpinner
 import com.xtsream.app.ui.components.buildCoilRequest
 import com.xtsream.app.ui.theme.AppColors
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-private data class FeedbackMessage(val text: String, val isError: Boolean)
 
 @Composable
 fun ProvidersScreen(
@@ -65,8 +64,7 @@ fun ProvidersScreen(
     val repoPlugins by ExtensionController.repoPlugins.collectAsState()
     val loadingRepos by ExtensionController.loadingRepos.collectAsState()
     val installedPlugins by ExtensionController.installedPlugins.collectAsState()
-    val loadedApis by ExtensionController.loadedApis.collectAsState()
-    val activeApi by ExtensionController.activeApi.collectAsState()
+    val activeProvider by ExtensionController.activeProvider.collectAsState()
     val installingKeys by ExtensionController.installingKeys.collectAsState()
 
     var sourceInput by remember { mutableStateOf("") }
@@ -74,22 +72,13 @@ fun ProvidersScreen(
     var activeTab by remember { mutableIntStateOf(0) } // 0 = Repositories, 1 = Installed
     var expandedRepoUrl by remember { mutableStateOf<String?>(null) }
     var pluginFilterQuery by remember { mutableStateOf("") }
-    var feedback by remember { mutableStateOf<FeedbackMessage?>(null) }
     var repoPendingDelete by remember { mutableStateOf<RepositoryData?>(null) }
-
-    LaunchedEffect(feedback) {
-        if (feedback != null) {
-            delay(5000)
-            feedback = null
-        }
-    }
 
     fun submitSource() {
         val raw = sourceInput.trim()
         if (raw.isBlank() || isAdding) return
         focusManager.clearFocus()
         isAdding = true
-        feedback = null
         scope.launch {
             val result = ExtensionController.addSourceFromInput(context, raw)
             isAdding = false
@@ -98,30 +87,34 @@ fun ProvidersScreen(
                 when (res) {
                     is AddSourceResult.RepositoryAdded -> {
                         activeTab = 0
-                        expandedRepoUrl = res.repository.url
+                        expandedRepoUrl = if (res.isMetaRepoSynced && res.addedChildRepos > 0) null else res.repository.url
                         pluginFilterQuery = ""
-                        val extra = if (res.addedChildRepos > 0) " + ${res.addedChildRepos} repos" else ""
-                        feedback = FeedbackMessage(
-                            text = "Added \"${res.repository.name}\" (${res.plugins.size} extensions$extra)",
-                            isError = false
-                        )
+                        val message = when {
+                            res.isMetaRepoSynced && res.addedChildRepos > 0 ->
+                                "Synced ${res.repository.name}: added ${res.addedChildRepos} repositories"
+                            res.addedChildRepos > 0 && res.plugins.isNotEmpty() ->
+                                "Added ${res.repository.name} (${res.plugins.size} extensions + ${res.addedChildRepos} repos)"
+                            res.addedChildRepos > 0 ->
+                                "Added ${res.repository.name} (+${res.addedChildRepos} repositories)"
+                            else ->
+                                "Added \"${res.repository.name}\" (${res.plugins.size} extensions)"
+                        }
+                        AppToastManager.showSuccess(message)
                     }
 
                     is AddSourceResult.DirectPluginInstalled -> {
                         activeTab = if (res.addedRepos > 0) 0 else 1
+                        val verb = if (res.wasUpdate) "Updated" else "Installed"
                         val detail = when {
-                            res.addedRepos > 0 -> "Installed ${res.pluginName} & added ${res.addedRepos} repositories"
-                            res.addedApis.isNotEmpty() -> "Installed ${res.pluginName} (${res.addedApis.joinToString()})"
-                            else -> "Installed ${res.pluginName}"
+                            res.addedRepos > 0 -> "$verb ${res.pluginName} & added ${res.addedRepos} repositories"
+                            res.addedApis.isNotEmpty() -> "$verb ${res.pluginName} (${res.addedApis.joinToString()})"
+                            else -> "$verb ${res.pluginName}"
                         }
-                        feedback = FeedbackMessage(text = detail, isError = false)
+                        AppToastManager.showSuccess(detail)
                     }
                 }
             }.onFailure { err ->
-                feedback = FeedbackMessage(
-                    text = err.message ?: "Failed to load \"$raw\"",
-                    isError = true
-                )
+                AppToastManager.showError(err.message ?: "Failed to load \"$raw\"")
             }
         }
     }
@@ -163,7 +156,7 @@ fun ProvidersScreen(
                             repositories.forEach { repo ->
                                 ExtensionController.loadRepositoryPlugins(repo, force = true)
                             }
-                            feedback = FeedbackMessage("Refreshed ${repositories.size} repositories", false)
+                            AppToastManager.showSuccess("Refreshed ${repositories.size} repositories")
                         }
                     }
                 ) {
@@ -257,40 +250,6 @@ fun ProvidersScreen(
             }
         }
 
-        // Feedback Banner
-        AnimatedVisibility(visible = feedback != null) {
-            feedback?.let { msg ->
-                val tint = if (msg.isError) AppColors.Danger else AppColors.Success
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .padding(bottom = 10.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(AppColors.SurfaceCard)
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = if (msg.isError) Icons.Filled.Warning else Icons.Filled.Check,
-                        contentDescription = null,
-                        tint = tint,
-                        modifier = Modifier.size(17.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = msg.text,
-                        color = AppColors.TextPrimary,
-                        fontSize = 12.sp,
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(onClick = { feedback = null }, modifier = Modifier.size(22.dp)) {
-                        Icon(Icons.Filled.Close, "Dismiss", tint = AppColors.TextMuted, modifier = Modifier.size(15.dp))
-                    }
-                }
-            }
-        }
-
         // Clean Underline Tabs (YouTube / CloudStream style)
         Row(modifier = Modifier.fillMaxWidth()) {
             ProviderUnderlineTab(
@@ -370,9 +329,9 @@ fun ProvidersScreen(
                                 scope.launch {
                                     val res = ExtensionController.loadRepositoryPlugins(repo, force = true)
                                     res.onSuccess { list ->
-                                        feedback = FeedbackMessage("Loaded ${list.size} extensions from ${repo.name}", false)
+                                        AppToastManager.showSuccess("Loaded ${list.size} extensions from ${repo.name}")
                                     }.onFailure { err ->
-                                        feedback = FeedbackMessage(err.message ?: "Refresh failed", true)
+                                        AppToastManager.showError(err.message ?: "Refresh failed")
                                     }
                                 }
                             },
@@ -381,9 +340,9 @@ fun ProvidersScreen(
                                 scope.launch {
                                     val res = ExtensionController.installPlugin(context, repo.url, plugin)
                                     res.onSuccess { msg ->
-                                        feedback = FeedbackMessage(msg, false)
+                                        AppToastManager.showSuccess(msg)
                                     }.onFailure { err ->
-                                        feedback = FeedbackMessage(err.message ?: "Failed installing ${plugin.name}", true)
+                                        AppToastManager.showError(err.message ?: "Failed installing ${plugin.name}")
                                     }
                                 }
                             },
@@ -391,9 +350,9 @@ fun ProvidersScreen(
                                 scope.launch {
                                     val res = ExtensionController.uninstallPlugin(context, repo.url, plugin)
                                     res.onSuccess {
-                                        feedback = FeedbackMessage("Uninstalled ${plugin.name}", false)
+                                        AppToastManager.showSuccess("Uninstalled ${plugin.name}")
                                     }.onFailure { err ->
-                                        feedback = FeedbackMessage(err.message ?: "Uninstall failed", true)
+                                        AppToastManager.showError(err.message ?: "Uninstall failed")
                                     }
                                 }
                             }
@@ -434,20 +393,18 @@ fun ProvidersScreen(
                     items(installedPlugins, key = { it.pluginData.filePath }) { info ->
                         InstalledExtensionFlatRow(
                             info = info,
-                            activeApiName = activeApi?.name,
-                            onSelectApi = { apiName ->
-                                loadedApis.firstOrNull { it.name == apiName }?.let { api ->
-                                    ExtensionController.selectProvider(api)
-                                    feedback = FeedbackMessage("Active provider: ${api.name}", false)
-                                }
+                            activeProviderKey = activeProvider?.key,
+                            onSelectEntry = { entry ->
+                                ExtensionController.selectProvider(entry)
+                                AppToastManager.showSuccess("Active provider: ${entry.displayName}")
                             },
                             onUninstall = {
                                 scope.launch {
                                     val res = ExtensionController.uninstallPlugin(info.pluginData.filePath)
                                     res.onSuccess {
-                                        feedback = FeedbackMessage("Uninstalled ${info.pluginData.internalName}", false)
+                                        AppToastManager.showSuccess("Uninstalled ${info.pluginData.internalName}")
                                     }.onFailure { err ->
-                                        feedback = FeedbackMessage(err.message ?: "Failed to uninstall", true)
+                                        AppToastManager.showError(err.message ?: "Failed to uninstall")
                                     }
                                 }
                             }
@@ -474,7 +431,7 @@ fun ProvidersScreen(
                         if (expandedRepoUrl == target.url) expandedRepoUrl = null
                         scope.launch {
                             ExtensionController.removeRepository(context, target)
-                            feedback = FeedbackMessage("Removed \"${target.name}\"", false)
+                            AppToastManager.showSuccess("Removed \"${target.name}\"")
                         }
                     }
                 ) {
@@ -830,8 +787,8 @@ private fun SitePluginFlatRow(
 @Composable
 private fun InstalledExtensionFlatRow(
     info: InstalledExtensionInfo,
-    activeApiName: String?,
-    onSelectApi: (String) -> Unit,
+    activeProviderKey: String?,
+    onSelectEntry: (ProviderEntry) -> Unit,
     onUninstall: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -855,10 +812,12 @@ private fun InstalledExtensionFlatRow(
                     Text(
                         text = buildString {
                             if (info.pluginData.version > 0) append("v${info.pluginData.version} • ")
-                            append(if (info.pluginData.isOnline) "Installed .cs3" else "Local .cs3")
+                            append(info.sourceLabel.ifBlank { if (info.pluginData.isOnline) "Installed .cs3" else "Local .cs3" })
                         },
                         color = AppColors.TextMuted,
-                        fontSize = 12.sp
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 IconButton(onClick = onUninstall, modifier = Modifier.size(34.dp)) {
@@ -866,19 +825,19 @@ private fun InstalledExtensionFlatRow(
                 }
             }
 
-            if (info.providedApis.isNotEmpty()) {
+            if (info.providedEntries.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(
                     modifier = Modifier.padding(start = 36.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    info.providedApis.take(4).forEach { apiName ->
-                        val isActive = apiName == activeApiName
+                    info.providedEntries.take(4).forEach { entry ->
+                        val isActive = entry.key == activeProviderKey
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
                                 .background(if (isActive) AppColors.Primary else AppColors.SurfaceCard)
-                                .clickable { onSelectApi(apiName) }
+                                .clickable { onSelectEntry(entry) }
                                 .padding(horizontal = 10.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -887,7 +846,7 @@ private fun InstalledExtensionFlatRow(
                                 Spacer(modifier = Modifier.width(4.dp))
                             }
                             Text(
-                                text = apiName,
+                                text = entry.displayName,
                                 color = if (isActive) Color.Black else AppColors.TextSecondary,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold,

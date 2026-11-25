@@ -16,6 +16,7 @@ data class MediaCardItem(
     val title: String,
     val url: String,
     val apiName: String,
+    val apiKey: String = "",
     val posterUrl: String?,
     val posterHeaders: Map<String, String> = emptyMap(),
     val type: String = "",
@@ -68,6 +69,8 @@ data class MetaUiData(
     val title: String,
     val url: String,
     val apiName: String,
+    val apiKey: String,
+    val sourceDisplayName: String,
     val typeLabel: String,
     val isMovieLike: Boolean,
     val posterUrl: String?,
@@ -88,7 +91,10 @@ data class MetaUiData(
     val defaultDubKey: String
 )
 
-fun SearchResponse.toMediaCardItem(isHorizontal: Boolean = false): MediaCardItem {
+fun SearchResponse.toMediaCardItem(
+    isHorizontal: Boolean = false,
+    apiKey: String = ""
+): MediaCardItem {
     val formattedScore = runCatching { score?.toStringNull(0.1, 10, 1) }.getOrNull()
     var hasSub = false
     var hasDub = false
@@ -119,6 +125,7 @@ fun SearchResponse.toMediaCardItem(isHorizontal: Boolean = false): MediaCardItem
         title = name.trim(),
         url = url,
         apiName = apiName,
+        apiKey = apiKey,
         posterUrl = posterUrl,
         posterHeaders = posterHeaders ?: emptyMap(),
         type = type?.let { formatTvType(it) } ?: "",
@@ -135,7 +142,10 @@ fun SearchResponse.toMediaCardItem(isHorizontal: Boolean = false): MediaCardItem
     )
 }
 
-fun LoadResponse.toMetaUiData(): MetaUiData {
+fun LoadResponse.toMetaUiData(
+    apiKey: String = "",
+    sourceDisplayName: String = apiName
+): MetaUiData {
     val formattedScore = runCatching { score?.toStringNull(0.1, 10, 1) }.getOrNull()
     val actorItems = actors.orEmpty().mapNotNull { actorData ->
         val actorName = actorData.actor.name.trim()
@@ -148,7 +158,7 @@ fun LoadResponse.toMetaUiData(): MetaUiData {
         )
     }
 
-    val recs = recommendations.orEmpty().map { it.toMediaCardItem() }
+    val recs = recommendations.orEmpty().map { it.toMediaCardItem(apiKey = apiKey) }
     val dubMap = linkedMapOf<String, List<MetaSeasonGroup>>()
     var showStatusLabel: String? = null
 
@@ -196,6 +206,8 @@ fun LoadResponse.toMetaUiData(): MetaUiData {
         title = name.trim(),
         url = url,
         apiName = apiName,
+        apiKey = apiKey,
+        sourceDisplayName = sourceDisplayName,
         typeLabel = formatTvType(type),
         isMovieLike = isMovieLike,
         posterUrl = posterUrl,
@@ -264,7 +276,7 @@ fun formatTvType(type: TvType): String = when (type) {
 }
 
 fun formatShortTvType(type: TvType): String = when (type) {
-    TvType.TvSeries -> "TV"
+    TvType.TvSeries -> "SERIES"
     TvType.Movie -> "MOVIE"
     TvType.Anime -> "ANIME"
     TvType.AnimeMovie -> "MOVIE"

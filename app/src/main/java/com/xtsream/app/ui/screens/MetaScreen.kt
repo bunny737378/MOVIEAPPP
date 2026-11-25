@@ -2,16 +2,18 @@ package com.xtsream.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Star
@@ -37,8 +39,10 @@ import com.xtsream.app.data.MetaEpisodeItem
 import com.xtsream.app.data.MetaUiData
 import com.xtsream.app.data.WatchlistStore
 import com.xtsream.app.ui.components.AppIcons
+import com.xtsream.app.ui.components.AppToastManager
 import com.xtsream.app.ui.components.ErrorStateView
 import com.xtsream.app.ui.components.M3LoadingView
+import com.xtsream.app.ui.components.NotchedEpisodeThumbnail
 import com.xtsream.app.ui.components.PosterCard
 import com.xtsream.app.ui.components.buildCoilRequest
 import com.xtsream.app.ui.theme.AppColors
@@ -55,8 +59,8 @@ fun MetaScreen(
     onBack: () -> Unit,
     onMediaClick: (MediaCardItem) -> Unit
 ) {
-    val vm: MetaViewModel = viewModel(key = "meta_${item.url}")
-    LaunchedEffect(item.url) { vm.load(item) }
+    val vm: MetaViewModel = viewModel(key = "meta_${item.apiKey}_${item.url}")
+    LaunchedEffect(item.apiKey, item.url) { vm.load(item) }
 
     val state by vm.uiState.collectAsState()
     val watchlist by WatchlistStore.watchlist.collectAsState()
@@ -125,6 +129,7 @@ fun MetaScreen(
                             title = meta.title,
                             url = meta.url,
                             apiName = meta.apiName,
+                            apiKey = meta.apiKey.ifBlank { item.apiKey },
                             posterUrl = meta.posterUrl ?: item.posterUrl,
                             posterHeaders = meta.posterHeaders.ifEmpty { item.posterHeaders },
                             type = meta.typeLabel,
@@ -133,7 +138,10 @@ fun MetaScreen(
                             score = meta.score ?: item.score,
                             year = meta.year ?: item.year
                         )
-                        WatchlistStore.toggleWatchlist(saveItem)
+                        val added = WatchlistStore.toggleWatchlist(saveItem)
+                        AppToastManager.showSuccess(
+                            if (added) "Added to My List" else "Removed from My List"
+                        )
                     },
                     onMediaClick = onMediaClick
                 )
@@ -154,7 +162,7 @@ private fun MetaLoadedContent(
 ) {
     val context = LocalContext.current
 
-    var plotExpanded by remember(meta.url) { mutableStateOf(false) }
+    var showDescriptionSheet by remember(meta.url) { mutableStateOf(false) }
     var selectedDub by remember(meta.url) { mutableStateOf(meta.defaultDubKey) }
     var selectedSeasonIndex by remember(meta.url, selectedDub) { mutableIntStateOf(0) }
     var selectedRangeIndex by remember(meta.url, selectedDub, selectedSeasonIndex) { mutableIntStateOf(0) }
@@ -184,7 +192,7 @@ private fun MetaLoadedContent(
     val safeRangeIndex = selectedRangeIndex.coerceIn(0, (episodeChunks.size - 1).coerceAtLeast(0))
     val visibleEpisodes = episodeChunks.getOrNull(safeRangeIndex).orEmpty()
 
-    // Structured Left-Label / Right-Value details rows (only non-empty fields)
+    // Structured Left-Label / Right-Value details rows (shown inside YouTube-style Description Sheet)
     val detailRows = remember(meta) {
         buildList {
             if (meta.typeLabel.isNotBlank()) add("Type" to meta.typeLabel)
@@ -197,9 +205,9 @@ private fun MetaLoadedContent(
                 add("Audio" to meta.dubStatusMap.keys.joinToString(" / "))
             }
             if (meta.tags.isNotEmpty()) {
-                add("Genres" to meta.tags.take(6).joinToString(", "))
+                add("Genres" to meta.tags.take(8).joinToString(", "))
             }
-            if (meta.apiName.isNotBlank()) add("Source" to meta.apiName)
+            if (meta.sourceDisplayName.isNotBlank()) add("Source" to meta.sourceDisplayName)
         }
     }
 
@@ -209,12 +217,12 @@ private fun MetaLoadedContent(
             .navigationBarsPadding(),
         contentPadding = PaddingValues(bottom = 36.dp)
     ) {
-        // 1. Full-Bleed Top Hero Artwork + Smooth Dark Gradient Scrim (NO portrait poster overlay!)
+        // 1. Full-Bleed Top Hero Artwork + Gradient Scrim + Title + Type/Status + 2-line YouTube-style Description Trigger
         item(key = "hero_backdrop") {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(380.dp)
+                    .height(365.dp)
                     .background(AppColors.Surface)
             ) {
                 val heroImg = meta.backgroundUrl ?: meta.posterUrl ?: fallbackItem.posterUrl
@@ -227,24 +235,24 @@ private fun MetaLoadedContent(
                     )
                 }
 
-                // Multi-stop shadow scrim blending top controls and bottom title into pitch black
+                // Multi-stop cinema scrim blending seamlessly into charcoal background
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(
                             Brush.verticalGradient(
                                 colorStops = arrayOf(
-                                    0.0f to Color.Black.copy(alpha = 0.65f),
+                                    0.0f to AppColors.Background.copy(alpha = 0.65f),
                                     0.26f to Color.Transparent,
-                                    0.56f to Color.Black.copy(alpha = 0.35f),
-                                    0.84f to Color(0xE8000000),
+                                    0.54f to AppColors.Background.copy(alpha = 0.40f),
+                                    0.83f to AppColors.Background.copy(alpha = 0.92f),
                                     1.0f to AppColors.Background
                                 )
                             )
                         )
                 )
 
-                // Clean top navigation bar (NO glass circles!)
+                // Clean top bar (NO glass circles!)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -271,48 +279,50 @@ private fun MetaLoadedContent(
                     }
                 }
 
-                // Title & quick summary anchored cleanly over bottom shadow
+                // Title & compact metadata anchored cleanly over bottom shadow
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
                     Text(
                         text = meta.title,
                         color = AppColors.Primary,
-                        fontSize = 26.sp,
+                        fontSize = 25.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        lineHeight = 31.sp,
+                        lineHeight = 30.sp,
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis
                     )
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         if (!meta.score.isNullOrBlank()) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Star, null, tint = AppColors.Gold, modifier = Modifier.size(14.dp))
+                                Icon(Icons.Filled.Star, null, tint = AppColors.Gold, modifier = Modifier.size(13.dp))
                                 Spacer(modifier = Modifier.width(3.dp))
-                                Text(meta.score, color = AppColors.Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Text(meta.score, color = AppColors.Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                         val quickLine = listOfNotNull(
-                            meta.year?.takeIf { it > 0 }?.toString(),
                             meta.typeLabel.takeIf { it.isNotBlank() },
-                            meta.durationMinutes?.takeIf { it > 0 }?.let { "${it}m" },
-                            meta.showStatus?.takeIf { it.isNotBlank() }
+                            meta.year?.takeIf { it > 0 }?.toString(),
+                            meta.showStatus?.takeIf { it.isNotBlank() },
+                            meta.durationMinutes?.takeIf { it > 0 }?.let { "${it}m" }
                         ).joinToString("  •  ")
                         if (quickLine.isNotBlank()) {
                             Text(
                                 text = quickLine,
                                 color = AppColors.TextSecondary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -320,7 +330,46 @@ private fun MetaLoadedContent(
             }
         }
 
-        // 2. Clean Primary Watchlist Action Button
+        // 2. YouTube-Style Compact 2-Line Synopsis + Down Arrow -> Opens Full Description Sheet
+        item(key = "yt_description_trigger") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showDescriptionSheet = true }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                Text(
+                    text = meta.plot.ifBlank { "Tap to view details, genres, cast & info" },
+                    color = AppColors.TextSecondary,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 1.dp)
+                ) {
+                    Text(
+                        text = "more",
+                        color = AppColors.Primary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        contentDescription = "Open full description",
+                        tint = AppColors.Primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+
+        // 3. Primary Watchlist Action Button
         item(key = "watchlist_action") {
             Row(
                 modifier = Modifier
@@ -332,9 +381,9 @@ private fun MetaLoadedContent(
                     onClick = onToggleWatchlist,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (isSaved) AppColors.SurfaceElevated else AppColors.Primary,
-                        contentColor = if (isSaved) AppColors.Primary else Color.Black
+                        contentColor = if (isSaved) AppColors.Primary else AppColors.OnPrimary
                     ),
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(44.dp)
@@ -354,120 +403,17 @@ private fun MetaLoadedContent(
             }
         }
 
-        // 3. Synopsis / Description (classic clean layout)
-        if (meta.plot.isNotBlank()) {
-            item(key = "plot") {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) { plotExpanded = !plotExpanded }
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        text = meta.plot,
-                        color = AppColors.TextSecondary,
-                        fontSize = 14.sp,
-                        lineHeight = 21.sp,
-                        maxLines = if (plotExpanded) Int.MAX_VALUE else 4,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (meta.plot.length > 170) {
-                        Spacer(modifier = Modifier.height(5.dp))
-                        Text(
-                            text = if (plotExpanded) "Less" else "More",
-                            color = AppColors.Primary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-            }
-        }
-
-        // 4. Structured Left-Label / Right-Value Info Rows
-        if (detailRows.isNotEmpty()) {
-            item(key = "details_spec_table") {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 10.dp)
-                ) {
-                    detailRows.forEachIndexed { index, (label, value) ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 9.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            Text(
-                                text = label,
-                                color = AppColors.TextMuted,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.widthIn(min = 90.dp)
-                            )
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Text(
-                                text = value,
-                                color = AppColors.TextPrimary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                textAlign = TextAlign.End,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        if (index < detailRows.lastIndex) {
-                            HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
-                        }
-                    }
-                }
-            }
-        }
-
-        // 5. Cast Carousel
-        if (meta.actors.isNotEmpty()) {
-            item(key = "cast_section") {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 12.dp, bottom = 6.dp)
-                ) {
-                    Text(
-                        text = "Cast",
-                        color = AppColors.TextPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        items(meta.actors, key = { "${it.name}_${it.role}" }) { actor ->
-                            ActorItem(actor = actor, headers = meta.posterHeaders)
-                        }
-                    }
-                }
-            }
-        }
-
-        // 6. Episodes Section — Compact Dropdown Selectors + Borderless Flat Episode Rows!
+        // 4. Episodes Section — Compact Dropdown Selectors + Cutout Thumbnails + Borderless Rows
         if (hasEpisodes) {
             item(key = "episodes_header_bar") {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 18.dp)
+                        .padding(top = 12.dp)
                 ) {
                     HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Title + Compact Sort/Layout Icons (NO glass boxes!)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -489,7 +435,6 @@ private fun MetaLoadedContent(
                         )
                         Spacer(modifier = Modifier.weight(1f))
 
-                        // Sort order toggle (Asc/Desc)
                         IconButton(
                             onClick = { reverseOrder = !reverseOrder },
                             modifier = Modifier.size(36.dp)
@@ -502,7 +447,6 @@ private fun MetaLoadedContent(
                             )
                         }
 
-                        // Cycle layout: Detailed -> Compact -> Grid
                         IconButton(
                             onClick = {
                                 episodeLayout = when (episodeLayout) {
@@ -526,7 +470,6 @@ private fun MetaLoadedContent(
                         }
                     }
 
-                    // Compact Dropdown Trigger Row: Season ▾  |  Range ▾  |  Sub/Dub ▾
                     val showSeasonPicker = seasons.size > 1
                     val showRangePicker = episodeChunks.size > 1
                     val showDubPicker = meta.dubStatusMap.size > 1
@@ -566,7 +509,6 @@ private fun MetaLoadedContent(
                 }
             }
 
-            // Borderless Episodes List (NO boxes around each episode!)
             when (episodeLayout) {
                 EpisodeLayoutMode.Detailed -> {
                     items(visibleEpisodes, key = { "ep_det_${it.season}_${it.number}_${it.data}" }) { ep ->
@@ -625,7 +567,7 @@ private fun MetaLoadedContent(
             }
         }
 
-        // 7. Recommendations ("More Like This") — ALWAYS visible directly on Meta page!
+        // 5. Recommendations ("More Like This") — ALWAYS visible directly on Meta page
         if (meta.recommendations.isNotEmpty()) {
             item(key = "recommendations_carousel") {
                 Column(
@@ -658,7 +600,21 @@ private fun MetaLoadedContent(
         }
     }
 
-    // Season Selector Bottom Sheet
+    // YouTube-Style Full Description Bottom Sheet (Full Synopsis + Left/Right Info Table + Cast)
+    if (showDescriptionSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showDescriptionSheet = false },
+            containerColor = AppColors.Surface,
+            dragHandle = { BottomSheetDefaults.DragHandle(color = AppColors.BorderStrong) }
+        ) {
+            DescriptionSheetContent(
+                meta = meta,
+                detailRows = detailRows,
+                onClose = { showDescriptionSheet = false }
+            )
+        }
+    }
+
     if (showSeasonSheet) {
         SelectionBottomSheet(
             title = "Select Season",
@@ -678,7 +634,6 @@ private fun MetaLoadedContent(
         )
     }
 
-    // Episode Range Selector Bottom Sheet
     if (showRangeSheet) {
         SelectionBottomSheet(
             title = "Episode Range",
@@ -699,7 +654,6 @@ private fun MetaLoadedContent(
         )
     }
 
-    // Sub / Dub Selector Bottom Sheet
     if (showDubSheet) {
         val dubKeys = meta.dubStatusMap.keys.toList()
         SelectionBottomSheet(
@@ -722,7 +676,6 @@ private fun MetaLoadedContent(
         )
     }
 
-    // Episode Details Bottom Sheet (clean metadata only — zero placeholder banners)
     selectedEpisodeForSheet?.let { ep ->
         ModalBottomSheet(
             onDismissRequest = { selectedEpisodeForSheet = null },
@@ -734,6 +687,158 @@ private fun MetaLoadedContent(
                 fallbackPoster = meta.backgroundUrl ?: meta.posterUrl,
                 headers = meta.posterHeaders
             )
+        }
+    }
+}
+
+/**
+ * YouTube-style Description Sheet:
+ * Header ("Description" + close), Title, full Synopsis, structured Left-Label / Right-Value info table, and Cast.
+ */
+@Composable
+private fun DescriptionSheetContent(
+    meta: MetaUiData,
+    detailRows: List<Pair<String, String>>,
+    onClose: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 580.dp)
+            .navigationBarsPadding()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Description",
+                color = AppColors.TextPrimary,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            IconButton(onClick = onClose, modifier = Modifier.size(34.dp)) {
+                Icon(Icons.Filled.Close, "Close", tint = AppColors.TextSecondary, modifier = Modifier.size(20.dp))
+            }
+        }
+        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp)
+        ) {
+            Text(
+                text = meta.title,
+                color = AppColors.TextPrimary,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                lineHeight = 22.sp
+            )
+
+            // Quick YouTube-style 3-stat strip if available
+            val stats = buildList {
+                meta.score?.takeIf { it.isNotBlank() }?.let { add(it to "Rating") }
+                meta.year?.takeIf { it > 0 }?.let { add(it.toString() to "Release") }
+                meta.durationMinutes?.takeIf { it > 0 }?.let { add("${it}m" to "Duration") }
+                meta.showStatus?.takeIf { it.isNotBlank() }?.let { add(it to "Status") }
+            }.take(3)
+
+            if (stats.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    stats.forEach { (value, label) ->
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = value,
+                                color = AppColors.TextPrimary,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = label,
+                                color = AppColors.TextMuted,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (meta.plot.isNotBlank()) {
+                Text(
+                    text = meta.plot,
+                    color = AppColors.TextSecondary,
+                    fontSize = 14.sp,
+                    lineHeight = 21.sp
+                )
+            }
+
+            // Structured Left-Label / Right-Value Info Table
+            if (detailRows.isNotEmpty()) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
+                    detailRows.forEachIndexed { index, (label, value) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Text(
+                                text = label,
+                                color = AppColors.TextMuted,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.widthIn(min = 86.dp)
+                            )
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Text(
+                                text = value,
+                                color = AppColors.TextPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                textAlign = TextAlign.End,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (index < detailRows.lastIndex) {
+                            HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
+                        }
+                    }
+                }
+            }
+
+            // Cast Carousel inside Description Sheet
+            if (meta.actors.isNotEmpty()) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Cast",
+                        color = AppColors.TextPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        items(meta.actors, key = { "${it.name}_${it.role}" }) { actor ->
+                            ActorItem(actor = actor, headers = meta.posterHeaders)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
         }
     }
 }
@@ -892,7 +997,7 @@ private fun ActorItem(actor: MetaActorItem, headers: Map<String, String>) {
 }
 
 /**
- * Borderless Netflix / Prime Video style episode row directly on pitch-black surface (NO outer card box).
+ * Borderless episode row with concave corner-cutout Episode Number thumbnail (NO outer box around each episode).
  */
 @Composable
 private fun BorderlessDetailedEpisodeRow(
@@ -901,7 +1006,6 @@ private fun BorderlessDetailedEpisodeRow(
     headers: Map<String, String>,
     onClick: () -> Unit
 ) {
-    val context = LocalContext.current
     val thumb = episode.posterUrl ?: fallbackPoster
     val airDate = remember(episode.airDateMs) {
         episode.airDateMs?.takeIf { it > 0L }?.let { ms ->
@@ -920,42 +1024,14 @@ private fun BorderlessDetailedEpisodeRow(
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .width(134.dp)
-                        .aspectRatio(16f / 9f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(AppColors.SurfaceCard),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (!thumb.isNullOrBlank()) {
-                        AsyncImage(
-                            model = buildCoilRequest(context, thumb, headers),
-                            contentDescription = episode.title,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Icon(AppIcons.Movie, null, tint = AppColors.TextMuted, modifier = Modifier.size(22.dp))
-                    }
-                    if (episode.number != null) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(5.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(Color.Black.copy(alpha = 0.78f))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "E${episode.number}",
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
+                NotchedEpisodeThumbnail(
+                    imageUrl = thumb,
+                    headers = headers,
+                    episodeNumber = episode.number,
+                    score = episode.score,
+                    notchBgColor = AppColors.Background,
+                    modifier = Modifier.width(138.dp)
+                )
 
                 Spacer(modifier = Modifier.width(14.dp))
 
@@ -974,24 +1050,12 @@ private fun BorderlessDetailedEpisodeRow(
                         lineHeight = 19.sp
                     )
                     Spacer(modifier = Modifier.height(5.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        if (!episode.score.isNullOrBlank()) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Star, null, tint = AppColors.Gold, modifier = Modifier.size(12.dp))
-                                Spacer(modifier = Modifier.width(2.dp))
-                                Text(episode.score, color = AppColors.Gold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                        val subMeta = listOfNotNull(
-                            episode.runTime?.takeIf { it > 0 }?.let { "${it}m" },
-                            airDate
-                        ).joinToString(" • ")
-                        if (subMeta.isNotBlank()) {
-                            Text(subMeta, color = AppColors.TextMuted, fontSize = 11.sp)
-                        }
+                    val subMeta = listOfNotNull(
+                        episode.runTime?.takeIf { it > 0 }?.let { "${it}m" },
+                        airDate
+                    ).joinToString(" • ")
+                    if (subMeta.isNotBlank()) {
+                        Text(subMeta, color = AppColors.TextMuted, fontSize = 11.sp)
                     }
                 }
             }
@@ -1016,9 +1080,6 @@ private fun BorderlessDetailedEpisodeRow(
     }
 }
 
-/**
- * Clean flat borderless compact episode row.
- */
 @Composable
 private fun BorderlessCompactEpisodeRow(
     episode: MetaEpisodeItem,
@@ -1081,7 +1142,6 @@ private fun EpisodeDetailSheetContent(
     fallbackPoster: String?,
     headers: Map<String, String>
 ) {
-    val context = LocalContext.current
     val thumb = episode.posterUrl ?: fallbackPoster
     val formattedDate = remember(episode.airDateMs) {
         episode.airDateMs?.takeIf { it > 0L }?.let { ms ->
@@ -1099,20 +1159,14 @@ private fun EpisodeDetailSheetContent(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         if (!thumb.isNullOrBlank()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(16f / 9f)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(AppColors.SurfaceCard)
-            ) {
-                AsyncImage(
-                    model = buildCoilRequest(context, thumb, headers),
-                    contentDescription = episode.title,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
+            NotchedEpisodeThumbnail(
+                imageUrl = thumb,
+                headers = headers,
+                episodeNumber = episode.number,
+                score = episode.score,
+                notchBgColor = AppColors.Surface,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {

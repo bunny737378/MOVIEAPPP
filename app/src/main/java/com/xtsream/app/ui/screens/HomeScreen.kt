@@ -15,16 +15,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -37,9 +39,12 @@ import com.xtsream.app.data.HomeSection
 import com.xtsream.app.data.MediaCardItem
 import com.xtsream.app.data.WatchlistStore
 import com.xtsream.app.engine.ExtensionController
+import com.xtsream.app.engine.ProviderEntry
 import com.xtsream.app.ui.components.AppIcons
+import com.xtsream.app.ui.components.AppToastManager
 import com.xtsream.app.ui.components.EmptyNoProvidersView
 import com.xtsream.app.ui.components.ErrorStateView
+import com.xtsream.app.ui.components.M3ContainedLoadingIndicator
 import com.xtsream.app.ui.components.M3LoadingView
 import com.xtsream.app.ui.components.PosterCard
 import com.xtsream.app.ui.components.ProviderPickerSheet
@@ -54,17 +59,18 @@ fun HomeScreen(
     homeViewModel: HomeViewModel,
     onMediaClick: (MediaCardItem) -> Unit,
     onSeeAllSection: (HomeSection) -> Unit,
-    onOpenProviders: () -> Unit
+    onOpenProviders: () -> Unit,
+    onSearchActiveProvider: (ProviderEntry) -> Unit
 ) {
     val state by homeViewModel.uiState.collectAsState()
-    val loadedApis by ExtensionController.loadedApis.collectAsState()
-    val activeApi by ExtensionController.activeApi.collectAsState()
+    val loadedProviders by ExtensionController.loadedProviders.collectAsState()
+    val activeProvider by ExtensionController.activeProvider.collectAsState()
     val isBooting by ExtensionController.isBooting.collectAsState()
     val watchlist by WatchlistStore.watchlist.collectAsState()
 
     var showProviderPicker by remember { mutableStateOf(false) }
 
-    val hasHero = !isBooting && loadedApis.isNotEmpty() && !state.isLoading && state.featuredItems.isNotEmpty()
+    val hasHero = !isBooting && loadedProviders.isNotEmpty() && !state.isLoading && state.featuredItems.isNotEmpty()
 
     Box(
         modifier = Modifier
@@ -76,7 +82,7 @@ fun HomeScreen(
                 M3LoadingView()
             }
 
-            loadedApis.isEmpty() -> {
+            loadedProviders.isEmpty() -> {
                 EmptyNoProvidersView(onOpenProviders = onOpenProviders)
             }
 
@@ -92,9 +98,33 @@ fun HomeScreen(
             }
 
             else -> {
+                val pullState = rememberPullToRefreshState()
                 PullToRefreshBox(
+                    state = pullState,
                     isRefreshing = state.isRefreshing,
                     onRefresh = { homeViewModel.refresh() },
+                    indicator = {
+                        val progress = pullState.distanceFraction.coerceIn(0f, 1.2f)
+                        if (state.isRefreshing || progress > 0.08f) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .statusBarsPadding()
+                                    .padding(top = 56.dp)
+                                    .graphicsLayer {
+                                        val s = if (state.isRefreshing) 1f else progress.coerceIn(0.3f, 1f)
+                                        scaleX = s
+                                        scaleY = s
+                                        alpha = if (state.isRefreshing) 1f else progress.coerceIn(0f, 1f)
+                                    }
+                            ) {
+                                M3ContainedLoadingIndicator(
+                                    containerSize = 44.dp,
+                                    indicatorSize = 26.dp
+                                )
+                            }
+                        }
+                    },
                     modifier = Modifier.fillMaxSize()
                 ) {
                     LazyColumn(
@@ -108,7 +138,12 @@ fun HomeScreen(
                                     items = state.featuredItems,
                                     watchlistUrls = watchlist.map { it.url }.toSet(),
                                     onDetailsClick = onMediaClick,
-                                    onToggleBookmark = { WatchlistStore.toggleWatchlist(it) }
+                                    onToggleBookmark = { item ->
+                                        val added = WatchlistStore.toggleWatchlist(item)
+                                        AppToastManager.showSuccess(
+                                            if (added) "Added to My List" else "Removed from My List"
+                                        )
+                                    }
                                 )
                             }
                         } else {
@@ -129,15 +164,15 @@ fun HomeScreen(
             }
         }
 
-        // Clean overlay top bar (transparent over hero scrim, pitch black otherwise)
-        if (loadedApis.isNotEmpty()) {
+        // Clean overlay top bar (transparent over hero scrim, charcoal otherwise)
+        if (loadedProviders.isNotEmpty()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(
                         if (hasHero) {
                             Brush.verticalGradient(
-                                listOf(Color.Black.copy(alpha = 0.72f), Color.Transparent)
+                                listOf(AppColors.Background.copy(alpha = 0.78f), Color.Transparent)
                             )
                         } else {
                             Brush.verticalGradient(listOf(AppColors.Background, AppColors.Background))
@@ -147,7 +182,6 @@ fun HomeScreen(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Provider selector button directly on bar (clean, zero clutter)
                 Row(
                     modifier = Modifier
                         .clickable(
@@ -158,13 +192,13 @@ fun HomeScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = activeApi?.name ?: "Select Provider",
+                        text = activeProvider?.displayName ?: "Select Provider",
                         color = AppColors.Primary,
                         fontSize = 19.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 220.dp)
+                        modifier = Modifier.widthIn(max = 240.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
@@ -177,15 +211,16 @@ fun HomeScreen(
 
                 Spacer(modifier = Modifier.weight(1f))
 
+                // Top-right Search icon scoped directly to the active Home provider
                 IconButton(
-                    onClick = { homeViewModel.refresh() },
+                    onClick = { activeProvider?.let { onSearchActiveProvider(it) } },
                     modifier = Modifier.size(38.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Refresh,
-                        contentDescription = "Refresh",
+                        imageVector = Icons.Filled.Search,
+                        contentDescription = "Search this provider",
                         tint = AppColors.Primary,
-                        modifier = Modifier.size(21.dp)
+                        modifier = Modifier.size(22.dp)
                     )
                 }
             }
@@ -194,8 +229,8 @@ fun HomeScreen(
 
     if (showProviderPicker) {
         ProviderPickerSheet(
-            providers = loadedApis,
-            activeProvider = activeApi,
+            providers = loadedProviders,
+            activeProvider = activeProvider,
             onSelect = { ExtensionController.selectProvider(it) },
             onManageProviders = onOpenProviders,
             onDismiss = { showProviderPicker = false }
@@ -203,9 +238,6 @@ fun HomeScreen(
     }
 }
 
-/**
- * Full-bleed edge-to-edge cinematic Hero Slider (Prime Video / CloudStream / Netflix style).
- */
 @Composable
 private fun FullBleedHeroSlider(
     items: List<MediaCardItem>,
@@ -232,7 +264,7 @@ private fun FullBleedHeroSlider(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(455.dp)
+                .height(450.dp)
         ) {
             HorizontalPager(
                 state = pagerState,
@@ -259,17 +291,17 @@ private fun FullBleedHeroSlider(
                         )
                     }
 
-                    // Seamless cinema fade into OLED black
+                    // Seamless cinema fade into charcoal background
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(
                                 Brush.verticalGradient(
                                     colorStops = arrayOf(
-                                        0.0f to Color.Black.copy(alpha = 0.55f),
+                                        0.0f to AppColors.Background.copy(alpha = 0.58f),
                                         0.28f to Color.Transparent,
-                                        0.58f to Color.Black.copy(alpha = 0.45f),
-                                        0.86f to Color(0xEB000000),
+                                        0.56f to AppColors.Background.copy(alpha = 0.45f),
+                                        0.85f to AppColors.Background.copy(alpha = 0.92f),
                                         1.0f to AppColors.Background
                                     )
                                 )
@@ -296,7 +328,6 @@ private fun FullBleedHeroSlider(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // Clean dot-separated metadata line (no cluttered pill spam)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -336,7 +367,7 @@ private fun FullBleedHeroSlider(
                                 onClick = { onDetailsClick(item) },
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = AppColors.Primary,
-                                    contentColor = Color.Black
+                                    contentColor = AppColors.OnPrimary
                                 ),
                                 shape = RoundedCornerShape(8.dp),
                                 contentPadding = PaddingValues(horizontal = 24.dp, vertical = 0.dp),

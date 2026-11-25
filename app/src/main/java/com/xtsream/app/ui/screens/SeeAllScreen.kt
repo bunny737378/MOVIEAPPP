@@ -38,8 +38,8 @@ fun SeeAllScreen(
 ) {
     val key = remember(source) {
         when (source) {
-            is SeeAllSource.HomeCategory -> "seeall_home_${source.apiName}_${source.title}"
-            is SeeAllSource.SearchProvider -> "seeall_search_${source.apiName}_${source.query}"
+            is SeeAllSource.HomeCategory -> "seeall_home_${source.apiKey}_${source.title}"
+            is SeeAllSource.SearchProvider -> "seeall_search_${source.apiKey}_${source.query}"
         }
     }
     val vm: SeeAllViewModel = viewModel(key = key)
@@ -113,7 +113,7 @@ fun SeeAllScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(state.items, key = { it.url }) { item ->
+                items(state.items, key = { "${it.apiKey}_${it.url}" }) { item ->
                     PosterCard(item = item, modifier = Modifier.fillMaxWidth(), onClick = { onMediaClick(item) })
                 }
                 if (state.isLoadingMore) {
@@ -141,7 +141,7 @@ fun SeeAllScreen(
                 contentPadding = PaddingValues(vertical = 8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(state.items, key = { it.url }) { item ->
+                items(state.items, key = { "${it.apiKey}_${it.url}" }) { item ->
                     MediaListRowCard(item = item, onClick = { onMediaClick(item) })
                 }
                 if (state.isLoadingMore) {

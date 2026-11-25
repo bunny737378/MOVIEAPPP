@@ -3,13 +3,14 @@ package com.xtsream.app.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageData
 import com.lagradost.cloudstream3.MainPageRequest
 import com.xtsream.app.data.HomeSection
 import com.xtsream.app.data.MediaCardItem
 import com.xtsream.app.data.toMediaCardItem
 import com.xtsream.app.engine.ExtensionController
+import com.xtsream.app.engine.ProviderEntry
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -21,9 +22,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicLong
 
 data class HomeUiState(
-    val providerName: String? = null,
+    val providerKey: String? = null,
+    val providerDisplayName: String? = null,
     val isLoading: Boolean = false,
     val isRefreshing: Boolean = false,
     val featuredItems: List<MediaCardItem> = emptyList(),
@@ -40,39 +43,46 @@ class HomeViewModel : ViewModel() {
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     private var loadJob: Job? = null
-    private var loadedProviderName: String? = null
+    private var loadedProviderKey: String? = null
+    private val requestCounter = AtomicLong(0L)
 
     init {
         viewModelScope.launch {
-            ExtensionController.activeApi.collect { api ->
-                if (api == null) {
+            ExtensionController.activeProvider.collect { entry ->
+                if (entry == null) {
+                    requestCounter.incrementAndGet()
                     loadJob?.cancel()
-                    loadedProviderName = null
+                    loadedProviderKey = null
                     _uiState.value = HomeUiState()
-                } else if (api.name != loadedProviderName) {
-                    loadHomePage(api, isRefresh = false)
+                } else if (entry.key != loadedProviderKey) {
+                    loadHomePage(entry, isRefresh = false)
+                } else if (_uiState.value.providerDisplayName != entry.displayName) {
+                    _uiState.update { it.copy(providerDisplayName = entry.displayName) }
                 }
             }
         }
     }
 
     fun refresh() {
-        val api = ExtensionController.activeApi.value ?: return
-        loadHomePage(api, isRefresh = true)
+        val entry = ExtensionController.activeProvider.value ?: return
+        loadHomePage(entry, isRefresh = true)
     }
 
     fun retry() {
-        val api = ExtensionController.activeApi.value ?: return
-        loadHomePage(api, isRefresh = false)
+        val entry = ExtensionController.activeProvider.value ?: return
+        loadHomePage(entry, isRefresh = false)
     }
 
-    private fun loadHomePage(api: MainAPI, isRefresh: Boolean) {
+    private fun loadHomePage(entry: ProviderEntry, isRefresh: Boolean) {
+        val api = entry.api
+        val myRequestId = requestCounter.incrementAndGet()
         loadJob?.cancel()
-        loadedProviderName = api.name
+        loadedProviderKey = entry.key
 
         _uiState.update {
             it.copy(
-                providerName = api.name,
+                providerKey = entry.key,
+                providerDisplayName = entry.displayName,
                 isLoading = !isRefresh,
                 isRefreshing = isRefresh,
                 errorMessage = null,
@@ -84,12 +94,14 @@ class HomeViewModel : ViewModel() {
         loadJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 if (!api.hasMainPage) {
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            isRefreshing = false,
-                            errorMessage = "${api.name} does not expose a home feed. Try searching instead."
-                        )
+                    if (requestCounter.get() == myRequestId) {
+                        _uiState.update {
+                            it.copy(
+                                isLoading = false,
+                                isRefreshing = false,
+                                errorMessage = "${entry.displayName} does not expose a home feed. Try searching instead."
+                            )
+                        }
                     }
                     return@launch
                 }
@@ -101,9 +113,9 @@ class HomeViewModel : ViewModel() {
                 val fetchedSections = mutableListOf<HomeSection>()
                 var lastError: String? = null
 
-                // Fetch pages in parallel batches of 4 so home loads fast while avoiding overwhelming sites
-                val batches = pages.chunked(4)
+                val batches = pages.chunked(3)
                 for (batch in batches) {
+                    if (requestCounter.get() != myRequestId) return@launch
                     val batchResults = coroutineScope {
                         batch.map { pageData ->
                             async {
@@ -113,16 +125,19 @@ class HomeViewModel : ViewModel() {
                                         data = pageData.data,
                                         horizontalImages = pageData.horizontalImages
                                     )
-                                    val response = withTimeoutOrNull(30_000L) {
+                                    val response = withTimeoutOrNull(45_000L) {
                                         api.getMainPage(1, req)
                                     }
                                     if (response != null) {
                                         response.items.mapNotNull { homeList ->
                                             val items = homeList.list.map {
-                                                it.toMediaCardItem(isHorizontal = homeList.isHorizontalImages || pageData.horizontalImages)
+                                                it.toMediaCardItem(
+                                                    isHorizontal = homeList.isHorizontalImages || pageData.horizontalImages,
+                                                    apiKey = entry.key
+                                                )
                                             }
                                             if (items.isEmpty()) null else HomeSection(
-                                                id = "${api.name}_${pageData.name}_${homeList.name}",
+                                                id = "${entry.key}_${pageData.name}_${homeList.name}",
                                                 title = homeList.name.ifBlank { pageData.name.ifBlank { "Featured" } },
                                                 items = items,
                                                 isHorizontal = homeList.isHorizontalImages || pageData.horizontalImages,
@@ -133,14 +148,18 @@ class HomeViewModel : ViewModel() {
                                     } else {
                                         emptyList()
                                     }
+                                } catch (ce: CancellationException) {
+                                    throw ce
                                 } catch (t: Throwable) {
-                                    Log.w(TAG, "Page load failed for ${api.name}/${pageData.name}", t)
-                                    lastError = t.message
+                                    Log.w(TAG, "Page load failed for ${entry.displayName}/${pageData.name}", t)
+                                    lastError = formatFriendlyError(t, entry.displayName)
                                     emptyList()
                                 }
                             }
                         }.awaitAll().flatten()
                     }
+
+                    if (requestCounter.get() != myRequestId) return@launch
 
                     if (batchResults.isNotEmpty()) {
                         fetchedSections.addAll(batchResults)
@@ -157,6 +176,8 @@ class HomeViewModel : ViewModel() {
                     }
                 }
 
+                if (requestCounter.get() != myRequestId) return@launch
+
                 val finalSections = fetchedSections.distinctBy { it.title }
                 val finalFeatured = finalSections.firstOrNull()?.items?.take(7).orEmpty()
 
@@ -167,18 +188,22 @@ class HomeViewModel : ViewModel() {
                         featuredItems = finalFeatured,
                         sections = finalSections,
                         errorMessage = if (finalSections.isEmpty()) {
-                            lastError ?: "No titles returned by ${api.name}. Pull to refresh or switch providers."
+                            lastError ?: "No titles returned by ${entry.displayName}. Tap Retry or switch providers."
                         } else null
                     )
                 }
+            } catch (ce: CancellationException) {
+                throw ce
             } catch (t: Throwable) {
-                Log.e(TAG, "Home load error for ${api.name}", t)
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        isRefreshing = false,
-                        errorMessage = t.message ?: "Failed to load ${api.name}"
-                    )
+                Log.e(TAG, "Home load error for ${entry.displayName}", t)
+                if (requestCounter.get() == myRequestId) {
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            isRefreshing = false,
+                            errorMessage = formatFriendlyError(t, entry.displayName)
+                        )
+                    }
                 }
             }
         }
