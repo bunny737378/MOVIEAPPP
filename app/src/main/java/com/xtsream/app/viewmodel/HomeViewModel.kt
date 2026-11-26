@@ -58,8 +58,8 @@ class HomeViewModel : ViewModel() {
                     _uiState.value = HomeUiState()
                 } else if (entry.key != loadedProviderKey) {
                     loadHomePage(entry, isRefresh = false)
-                } else if (_uiState.value.providerDisplayName != entry.displayName) {
-                    _uiState.update { it.copy(providerDisplayName = entry.displayName) }
+                } else if (_uiState.value.providerDisplayName != entry.shortDisplayName) {
+                    _uiState.update { it.copy(providerDisplayName = entry.shortDisplayName) }
                 }
             }
         }
@@ -91,7 +91,7 @@ class HomeViewModel : ViewModel() {
         _uiState.update {
             it.copy(
                 providerKey = entry.key,
-                providerDisplayName = entry.displayName,
+                providerDisplayName = entry.shortDisplayName,
                 isLoading = !isRefresh,
                 isRefreshing = isRefresh,
                 errorMessage = null,
@@ -108,7 +108,7 @@ class HomeViewModel : ViewModel() {
                             it.copy(
                                 isLoading = false,
                                 isRefreshing = false,
-                                errorMessage = "${entry.displayName} does not expose a home feed. Try searching instead."
+                                errorMessage = "${entry.shortDisplayName} does not expose a home feed. Try searching instead."
                             )
                         }
                     }
@@ -161,7 +161,7 @@ class HomeViewModel : ViewModel() {
                                     throw ce
                                 } catch (t: Throwable) {
                                     Log.w(TAG, "Page load failed for ${entry.displayName}/${pageData.name}", t)
-                                    lastError = formatFriendlyError(t, entry.displayName)
+                                    lastError = formatFriendlyError(t, entry.shortDisplayName)
                                     emptyList()
                                 }
                             }
@@ -197,7 +197,7 @@ class HomeViewModel : ViewModel() {
                         featuredItems = finalFeatured,
                         sections = finalSections,
                         errorMessage = if (finalSections.isEmpty()) {
-                            lastError ?: "No titles returned by ${entry.displayName}. Tap Retry or switch providers."
+                            lastError ?: "No titles returned by ${entry.shortDisplayName}. Tap Retry or switch providers."
                         } else null
                     )
                 }
@@ -210,7 +210,7 @@ class HomeViewModel : ViewModel() {
                         it.copy(
                             isLoading = false,
                             isRefreshing = false,
-                            errorMessage = formatFriendlyError(t, entry.displayName)
+                            errorMessage = formatFriendlyError(t, entry.shortDisplayName)
                         )
                     }
                 }

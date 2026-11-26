@@ -58,10 +58,40 @@ data class ProviderEntry(
     val api: MainAPI,
     val sourceLabel: String,
     val displayName: String,
+    val shortDisplayName: String = abbreviateProviderName(displayName),
     val isDuplicateName: Boolean,
     val isStremio: Boolean = false,
     val iconUrl: String? = null
 )
+
+/**
+ * If a provider/extension name has more than 2 words (e.g. "The Movie Database Addon"),
+ * abbreviates it to uppercase initials ("TMDA") for compact display on Home, Search, Meta, etc.
+ * Keeps names with 1–2 words unchanged. ProvidersScreen continues showing full displayName.
+ */
+fun abbreviateProviderName(rawName: String): String {
+    val trimmed = rawName.trim()
+    if (trimmed.isBlank()) return trimmed
+    // Preserve optional duplicate suffix like " (CNCVerse)" only if needed; abbreviate base name
+    val suffixMatch = Regex("^(.*?)(\\s*\\([^)]+\\))$").matchEntire(trimmed)
+    val base = suffixMatch?.groupValues?.getOrNull(1)?.trim() ?: trimmed
+    val suffix = suffixMatch?.groupValues?.getOrNull(2).orEmpty()
+
+    val words = base.split(Regex("[\\s_\\-/|+]+"))
+        .map { it.trim() }
+        .filter { token -> token.any { ch -> ch.isLetterOrDigit() } }
+
+    if (words.size <= 2) return trimmed
+
+    val acronym = buildString {
+        for (word in words) {
+            val firstChar = word.firstOrNull { it.isLetterOrDigit() } ?: continue
+            append(firstChar.uppercaseChar())
+        }
+    }
+    if (acronym.length < 2) return trimmed
+    return if (suffix.isNotBlank()) "$acronym$suffix" else acronym
+}
 
 sealed class AddSourceResult {
     data class RepositoryAdded(
@@ -97,6 +127,10 @@ object ExtensionController {
     private val initMutex = Mutex()
     @Volatile
     private var isInitialized = false
+
+    /** Timestamp until which plugin-triggered dialogs (settings) are explicitly allowed. */
+    @Volatile
+    var pluginSettingsAllowedUntilMs: Long = 0L
 
     private val _isBooting = MutableStateFlow(true)
     val isBooting: StateFlow<Boolean> = _isBooting.asStateFlow()
@@ -294,6 +328,7 @@ object ExtensionController {
                 api = api,
                 sourceLabel = baseSource,
                 displayName = displayName,
+                shortDisplayName = abbreviateProviderName(displayName),
                 isDuplicateName = isDup,
                 isStremio = isStremio,
                 iconUrl = iconUrl
@@ -1135,6 +1170,8 @@ object ExtensionController {
         val opener = plugin.openSettings
             ?: return Result.failure(IllegalStateException("This extension has no settings"))
         val hostCtx = CommonActivity.activity?.takeIf { !it.isFinishing && !it.isDestroyed } ?: context
+        // Allow plugin settings dialog fragments opened explicitly by user click
+        pluginSettingsAllowedUntilMs = System.currentTimeMillis() + 6_000L
         return runCatching {
             opener.invoke(hostCtx)
         }.onFailure { err ->

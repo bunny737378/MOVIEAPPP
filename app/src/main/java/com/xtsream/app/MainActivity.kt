@@ -1,7 +1,9 @@
 package com.xtsream.app
 
+import android.content.Context
 import android.graphics.Color
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.BackEventCompat
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -9,6 +11,9 @@ import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.fragment.app.DialogFragment
+import androidx.fragment.app.Fragment
+import androidx.fragment.app.FragmentManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -63,13 +68,74 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 
 private sealed class AppOverlay(val id: Long = System.nanoTime()) {
-    val isClosing = mutableStateOf(false)
-
     class SeeAll(val source: SeeAllSource) : AppOverlay()
     class Meta(val item: MediaCardItem, val originBounds: Rect? = null) : AppOverlay()
 }
 
 class MainActivity : AppCompatActivity() {
+
+    companion object {
+        private const val TAG = "MainActivity"
+
+        private val blockedPromoDialogTokens = listOf(
+            "donation", "donate", "promo", "sponsor", "patreon", "kofi", "ko_fi",
+            "buymeacoffee", "telegram", "discord", "announcement", "changelog",
+            "supportdialog", "supporter", "bannerdialog", "addialog", "nagdialog"
+        )
+
+        private val allowedPluginDialogTokens = listOf(
+            "settings", "setting", "config", "pref", "option",
+            "cloudflare", "cfwebview", "webview", "captcha", "verify", "challenge", "login", "auth"
+        )
+    }
+
+    private fun shouldBlockPluginFragment(fragment: Fragment): Boolean {
+        val fqcn = fragment.javaClass.name
+        val lower = fqcn.lowercase()
+
+        // Always block explicit donation / promotional / support dialogs regardless of timing
+        if (blockedPromoDialogTokens.any { lower.contains(it) }) {
+            return true
+        }
+
+        // Only inspect fragments loaded from external plugin classloaders
+        val isFromPluginClassLoader = fragment.javaClass.classLoader != MainActivity::class.java.classLoader
+        if (!isFromPluginClassLoader) return false
+
+        // Always allow legitimate plugin settings & Cloudflare/WebView verification dialogs
+        if (allowedPluginDialogTokens.any { lower.contains(it) }) {
+            return false
+        }
+
+        // Allow dialogs explicitly triggered right after clicking extension Settings icon
+        if (System.currentTimeMillis() <= ExtensionController.pluginSettingsAllowedUntilMs) {
+            return false
+        }
+
+        // Block unsolicited popup DialogFragments injected by plugins
+        return fragment is DialogFragment
+    }
+
+    private fun suppressPluginFragment(fm: FragmentManager, fragment: Fragment) {
+        Log.i(TAG, "Blocked unsolicited plugin popup: ${fragment.javaClass.name}")
+        if (fragment is DialogFragment) {
+            runCatching { fragment.showsDialog = false }
+            runCatching { fragment.dismissAllowingStateLoss() }
+        }
+        runCatching {
+            if (!fm.isDestroyed && !fm.isStateSaved) {
+                fm.beginTransaction().remove(fragment).commitAllowingStateLoss()
+            } else {
+                window.decorView.post {
+                    runCatching {
+                        if (!fm.isDestroyed) {
+                            fm.beginTransaction().remove(fragment).commitAllowingStateLoss()
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,6 +143,24 @@ class MainActivity : AppCompatActivity() {
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT)
+        )
+
+        // Intercept and block promotional / donation popups injected by CloudStream extensions
+        supportFragmentManager.registerFragmentLifecycleCallbacks(
+            object : FragmentManager.FragmentLifecycleCallbacks() {
+                override fun onFragmentPreAttached(fm: FragmentManager, f: Fragment, context: Context) {
+                    if (shouldBlockPluginFragment(f)) {
+                        suppressPluginFragment(fm, f)
+                    }
+                }
+
+                override fun onFragmentStarted(fm: FragmentManager, f: Fragment) {
+                    if (shouldBlockPluginFragment(f)) {
+                        suppressPluginFragment(fm, f)
+                    }
+                }
+            },
+            true
         )
 
         runCatching { CommonActivity.setActivityInstance(this) }
@@ -128,24 +212,19 @@ private fun MovieAppRoot() {
         overlayStack.add(AppOverlay.SeeAll(source))
     }
 
-    fun requestCloseTopOverlay() {
-        val top = overlayStack.lastOrNull() ?: return
-        if (!top.isClosing.value) {
-            top.isClosing.value = true
-        }
-    }
+    // Real Android Predictive Back Gesture state for the top active overlay
+    val backProgress = remember { Animatable(0f) }
+    var backSwipeEdge by remember { mutableIntStateOf(BackEventCompat.EDGE_LEFT) }
 
-    fun removeOverlay(overlay: AppOverlay) {
-        overlayStack.remove(overlay)
+    fun popTopOverlay() {
+        if (overlayStack.isNotEmpty()) {
+            overlayStack.removeAt(overlayStack.lastIndex)
+        }
     }
 
     BackHandler(enabled = overlayStack.isEmpty() && selectedTab != MainTab.Home) {
         selectedTab = MainTab.Home
     }
-
-    // Real Android Predictive Back Gesture state for the top active overlay
-    val backProgress = remember { Animatable(0f) }
-    var backSwipeEdge by remember { mutableIntStateOf(BackEventCompat.EDGE_LEFT) }
 
     PredictiveBackHandler(enabled = overlayStack.isNotEmpty()) { progressFlow: Flow<BackEventCompat> ->
         try {
@@ -153,8 +232,9 @@ private fun MovieAppRoot() {
                 backSwipeEdge = backEvent.swipeEdge
                 backProgress.snapTo(backEvent.progress.coerceIn(0f, 1f))
             }
-            // Trigger smooth shrink-back / exit animation on top overlay; underlying sub-pages stay completely still!
-            requestCloseTopOverlay()
+            // Predictive back ONLY: once committed, pop immediately with NO extra exit/hide animation!
+            popTopOverlay()
+            backProgress.snapTo(0f)
         } catch (_: CancellationException) {
             backProgress.animateTo(
                 targetValue = 0f,
@@ -189,7 +269,7 @@ private fun MovieAppRoot() {
                             SeeAllSource.HomeCategory(
                                 apiKey = provider.key,
                                 apiName = provider.api.name,
-                                displayName = provider.displayName,
+                                displayName = provider.shortDisplayName,
                                 title = section.title,
                                 mainPageData = mpData,
                                 initialItems = section.items,
@@ -258,7 +338,7 @@ private fun MovieAppRoot() {
 
         // Single stable keyed loop for ALL active overlays:
         // Previously opened sub-pages stay at progress=1f in their EXACT composable slot,
-        // so popping a child sub-page NEVER replays the parent sub-page's open animation!
+        // and closing uses ONLY live Android Predictive Back (no extra exit/hide animation!).
         overlayStack.forEachIndexed { index, overlay ->
             val isTop = index == overlayStack.lastIndex
             key(overlay.id) {
@@ -270,8 +350,7 @@ private fun MovieAppRoot() {
                     predictiveBackProgress = if (isTop) backProgress.value else 0f,
                     backSwipeEdge = backSwipeEdge,
                     onResetBackProgress = { backProgress.snapTo(0f) },
-                    onRequestClose = { requestCloseTopOverlay() },
-                    onRemoved = { removeOverlay(overlay) },
+                    onRequestClose = { popTopOverlay() },
                     onMediaClick = ::openMeta
                 )
             }
@@ -297,13 +376,11 @@ private fun OverlayAnimatedLayer(
     backSwipeEdge: Int,
     onResetBackProgress: suspend () -> Unit,
     onRequestClose: () -> Unit,
-    onRemoved: () -> Unit,
     onMediaClick: (MediaCardItem, Rect?) -> Unit
 ) {
     val density = LocalDensity.current
     val animProgress = remember(overlay.id) { Animatable(0f) }
     var hasFinishedOpen by remember(overlay.id) { mutableStateOf(false) }
-    val closing by overlay.isClosing
     val originBounds = (overlay as? AppOverlay.Meta)?.originBounds
 
     // Open animation: runs ONCE per overlay instance when pushed (expands from poster card if bounds exist)
@@ -312,34 +389,18 @@ private fun OverlayAnimatedLayer(
         animProgress.animateTo(
             targetValue = 1f,
             animationSpec = tween(
-                durationMillis = if (originBounds != null) 310 else 250,
+                durationMillis = if (originBounds != null) 300 else 230,
                 easing = FastOutSlowInEasing
             )
         )
         hasFinishedOpen = true
     }
 
-    // Close animation: uses the normal clean exit animation (does NOT shrink back into the poster card)
-    LaunchedEffect(closing) {
-        if (closing) {
-            hasFinishedOpen = true
-            animProgress.animateTo(
-                targetValue = 0f,
-                animationSpec = tween(
-                    durationMillis = 210,
-                    easing = FastOutSlowInEasing
-                )
-            )
-            onResetBackProgress()
-            onRemoved()
-        }
-    }
-
     val p = animProgress.value
-    val bp = if (isTop && !closing) predictiveBackProgress else 0f
+    val bp = if (isTop) predictiveBackProgress else 0f
 
-    // Full-screen touch blocker & dim scrim so taps NEVER bleed through to screens underneath (even during loading!)
-    val scrimAlpha = if (isTop) (0.50f * p * (1f - bp * 0.55f)).coerceIn(0f, 0.50f) else 0f
+    // Full-screen touch blocker & dim scrim so taps NEVER bleed through to screens underneath
+    val scrimAlpha = if (isTop) (0.48f * p * (1f - bp * 0.65f)).coerceIn(0f, 0.48f) else 0f
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -358,13 +419,15 @@ private fun OverlayAnimatedLayer(
         originBounds.left < rootWidthPx &&
         originBounds.top < rootHeightPx
 
-    // Use expand-from-card ONLY while opening; once opened, closing & predictive back use the normal smooth exit!
-    val useCardExpand = hasValidCardOrigin && !hasFinishedOpen && !closing && bp == 0f
+    // Card expand ONLY while opening; once opened, ONLY live predictive back drives movement
+    val useCardExpand = hasValidCardOrigin && !hasFinishedOpen && bp == 0f
 
     val cornerRadius = if (useCardExpand) {
         (14f * (1f - p)).dp
+    } else if (bp > 0f) {
+        (28f * bp).dp
     } else {
-        if (bp > 0f) (28f * bp).dp else (22f * (1f - p)).dp
+        (18f * (1f - p)).dp
     }
     val shape = RoundedCornerShape(cornerRadius)
 
@@ -388,7 +451,7 @@ private fun OverlayAnimatedLayer(
             }
     } else {
         val enterScale = 0.94f + (0.06f * p)
-        val enterTranslateY = with(density) { (36.dp * (1f - p)).toPx() }
+        val enterTranslateY = with(density) { (30.dp * (1f - p)).toPx() }
         val backScale = 1f - (0.14f * bp)
         val backTranslateX = with(density) {
             val shift = (44.dp * bp).toPx()
@@ -401,7 +464,7 @@ private fun OverlayAnimatedLayer(
                 scaleY = enterScale * backScale
                 translationX = backTranslateX
                 translationY = enterTranslateY
-                alpha = (0.35f + 0.65f * p).coerceIn(0f, 1f)
+                alpha = if (bp > 0f) 1f else (0.35f + 0.65f * p).coerceIn(0f, 1f)
             }
     }
 

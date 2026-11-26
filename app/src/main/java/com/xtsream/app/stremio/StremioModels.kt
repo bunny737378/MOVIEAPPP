@@ -168,3 +168,28 @@ data class StremioMeta(
     val awards: String? = null,
     val website: String? = null
 )
+
+data class StremioStream(
+    val addonName: String,
+    val name: String? = null,
+    val title: String? = null,
+    val description: String? = null,
+    val url: String? = null,
+    val infoHash: String? = null,
+    val fileIdx: Int? = null,
+    val externalUrl: String? = null,
+    val ytId: String? = null,
+    val headers: Map<String, String> = emptyMap(),
+    val filename: String? = null,
+    val videoSize: Long? = null
+) {
+    val resolvedLink: String
+        get() = when {
+            !url.isNullOrBlank() -> url
+            !infoHash.isNullOrBlank() -> "magnet:?xt=urn:btih:$infoHash"
+            !externalUrl.isNullOrBlank() -> externalUrl
+            !ytId.isNullOrBlank() -> "https://www.youtube.com/watch?v=$ytId"
+            else -> ""
+        }
+}
+

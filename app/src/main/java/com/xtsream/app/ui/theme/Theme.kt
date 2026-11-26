@@ -29,7 +29,7 @@ object AppColors {
     val SubPill = Color(0xFFF5F5F7)
     val DubPill = Color(0xFFF5F5F7)
     val AudioBadgeInk = Color(0xFF111114)
-    val TypePill = Color(0xFF0A0A0D)
+    val TypePill = Color(0xFF2F2F3B)
     val EpisodePill = Color(0xFF2F2F3B)
 
     val SubGreen = Color(0xFF4ADE80)

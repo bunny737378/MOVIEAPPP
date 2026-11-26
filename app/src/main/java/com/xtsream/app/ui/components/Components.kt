@@ -49,6 +49,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.xtsream.app.data.MediaCardItem
 import com.xtsream.app.engine.ProviderEntry
+import com.xtsream.app.engine.abbreviateProviderName
 import com.xtsream.app.ui.theme.AppColors
 
 enum class MainTab(
@@ -391,33 +392,22 @@ fun PosterCard(
                         ) {
                             Column(
                                 modifier = Modifier.width(notchStackWidth),
-                                verticalArrangement = Arrangement.spacedBy(if (singleTopBox && hasTypeBelow) 1.5.dp else 2.dp)
+                                verticalArrangement = Arrangement.spacedBy(3.dp)
                             ) {
                                 if (hasTopRow) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         if (bothAudio) {
-                                            // Split 50/50 within the exact same half-poster width
-                                            val subShape = RoundedCornerShape(
-                                                topStart = 8.dp,
-                                                topEnd = 3.dp,
-                                                bottomStart = if (hasTypeBelow) 2.dp else 8.dp,
-                                                bottomEnd = if (hasTypeBelow) 2.dp else 3.dp
-                                            )
-                                            val dubShape = RoundedCornerShape(
-                                                topStart = 3.dp,
-                                                topEnd = 8.dp,
-                                                bottomStart = if (hasTypeBelow) 2.dp else 3.dp,
-                                                bottomEnd = if (hasTypeBelow) 2.dp else 8.dp
-                                            )
+                                            // Split 50/50 with crisp gap between Sub, Dub, and Type below
+                                            val audioChipShape = RoundedCornerShape(6.dp)
                                             AudioBadgeBox(
                                                 icon = AppIcons.ClosedCaption,
                                                 count = item.subEpisodes,
                                                 bgColor = AppColors.SubPill,
-                                                shape = subShape,
+                                                shape = audioChipShape,
                                                 height = badgeHeight,
                                                 modifier = Modifier.weight(1f)
                                             )
@@ -425,22 +415,12 @@ fun PosterCard(
                                                 icon = AppIcons.Mic,
                                                 count = item.dubEpisodes,
                                                 bgColor = AppColors.DubPill,
-                                                shape = dubShape,
+                                                shape = audioChipShape,
                                                 height = badgeHeight,
                                                 modifier = Modifier.weight(1f)
                                             )
                                         } else if (item.hasSub) {
-                                            // Single Sub box: rounded top, FLAT bottom when stacked over Type
-                                            val shape = if (hasTypeBelow) {
-                                                RoundedCornerShape(
-                                                    topStart = 8.dp,
-                                                    topEnd = 8.dp,
-                                                    bottomStart = 0.dp,
-                                                    bottomEnd = 0.dp
-                                                )
-                                            } else {
-                                                RoundedCornerShape(50)
-                                            }
+                                            val shape = if (hasTypeBelow) RoundedCornerShape(6.dp) else RoundedCornerShape(50)
                                             AudioBadgeBox(
                                                 icon = AppIcons.ClosedCaption,
                                                 count = item.subEpisodes,
@@ -450,17 +430,7 @@ fun PosterCard(
                                                 modifier = Modifier.fillMaxWidth()
                                             )
                                         } else if (item.hasDub) {
-                                            // Single Dub box: rounded top, FLAT bottom when stacked over Type
-                                            val shape = if (hasTypeBelow) {
-                                                RoundedCornerShape(
-                                                    topStart = 8.dp,
-                                                    topEnd = 8.dp,
-                                                    bottomStart = 0.dp,
-                                                    bottomEnd = 0.dp
-                                                )
-                                            } else {
-                                                RoundedCornerShape(50)
-                                            }
+                                            val shape = if (hasTypeBelow) RoundedCornerShape(6.dp) else RoundedCornerShape(50)
                                             AudioBadgeBox(
                                                 icon = AppIcons.Mic,
                                                 count = item.dubEpisodes,
@@ -470,16 +440,7 @@ fun PosterCard(
                                                 modifier = Modifier.fillMaxWidth()
                                             )
                                         } else if (hasEpOnly && item.episodeCount != null) {
-                                            val shape = if (hasTypeBelow) {
-                                                RoundedCornerShape(
-                                                    topStart = 8.dp,
-                                                    topEnd = 8.dp,
-                                                    bottomStart = 0.dp,
-                                                    bottomEnd = 0.dp
-                                                )
-                                            } else {
-                                                RoundedCornerShape(50)
-                                            }
+                                            val shape = if (hasTypeBelow) RoundedCornerShape(6.dp) else RoundedCornerShape(50)
                                             Box(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
@@ -503,25 +464,8 @@ fun PosterCard(
                                 }
 
                                 if (typeText != null) {
-                                    // Type box shape:
-                                    // - Standalone (no top row): fully rounded pill
-                                    // - Single Sub/Dub/EP above: FLAT top, rounded bottom
-                                    // - Both Sub+Dub above: tight flat-ish top, rounded bottom
-                                    val typeShape = when {
-                                        !hasTopRow -> RoundedCornerShape(50)
-                                        singleTopBox -> RoundedCornerShape(
-                                            topStart = 0.dp,
-                                            topEnd = 0.dp,
-                                            bottomStart = 8.dp,
-                                            bottomEnd = 8.dp
-                                        )
-                                        else -> RoundedCornerShape(
-                                            topStart = 2.dp,
-                                            topEnd = 2.dp,
-                                            bottomStart = 8.dp,
-                                            bottomEnd = 8.dp
-                                        )
-                                    }
+                                    // Crisp self-contained Type box separated by a clean gap from Sub/Dub above
+                                    val typeShape = if (!hasTopRow) RoundedCornerShape(50) else RoundedCornerShape(6.dp)
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -533,7 +477,7 @@ fun PosterCard(
                                     ) {
                                         Text(
                                             text = typeText,
-                                            color = Color.White,
+                                            color = AppColors.TextPrimary,
                                             fontSize = 7.5.sp,
                                             fontWeight = FontWeight.ExtraBold,
                                             letterSpacing = 0.4.sp,
@@ -667,7 +611,8 @@ private fun AudioBadgeBox(
 }
 
 /**
- * Episode Thumbnail with matching Concave Corner Cutout for Episode Number (and optional Rating).
+ * Episode Thumbnail with matching Concave Corner Cutout for Episode Number,
+ * optional white Sub/Dub icon badges right beside EP count, and optional Rating.
  */
 @Composable
 fun NotchedEpisodeThumbnail(
@@ -675,6 +620,8 @@ fun NotchedEpisodeThumbnail(
     headers: Map<String, String>,
     episodeNumber: Int?,
     score: String? = null,
+    hasSub: Boolean = false,
+    hasDub: Boolean = false,
     notchBgColor: Color = AppColors.Background,
     modifier: Modifier = Modifier
 ) {
@@ -740,8 +687,8 @@ fun NotchedEpisodeThumbnail(
             }
         }
 
-        // Bottom-Left Episode Number Cutout
-        if (episodeNumber != null) {
+        // Bottom-Left Episode Number + White Sub/Dub Icon Badges Cutout
+        if (episodeNumber != null || hasSub || hasDub) {
             Column(
                 modifier = Modifier.align(Alignment.BottomStart),
                 horizontalAlignment = Alignment.Start
@@ -754,22 +701,63 @@ fun NotchedEpisodeThumbnail(
                             .background(notchBgColor)
                             .padding(top = notchGap, end = notchGap)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .height(17.dp)
-                                .clip(RoundedCornerShape(50))
-                                .background(AppColors.EpisodePill)
-                                .padding(horizontal = 7.dp),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "EP $episodeNumber",
-                                color = AppColors.TextPrimary,
-                                fontSize = 8.5.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                letterSpacing = 0.3.sp,
-                                lineHeight = 9.sp
-                            )
+                            if (episodeNumber != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .height(17.dp)
+                                        .clip(RoundedCornerShape(50))
+                                        .background(AppColors.EpisodePill)
+                                        .padding(horizontal = 7.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "EP $episodeNumber",
+                                        color = AppColors.TextPrimary,
+                                        fontSize = 8.5.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        letterSpacing = 0.3.sp,
+                                        lineHeight = 9.sp
+                                    )
+                                }
+                            }
+                            if (hasSub) {
+                                Box(
+                                    modifier = Modifier
+                                        .height(17.dp)
+                                        .width(20.dp)
+                                        .clip(RoundedCornerShape(50))
+                                        .background(AppColors.SubPill),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = AppIcons.ClosedCaption,
+                                        contentDescription = "Sub",
+                                        tint = AppColors.AudioBadgeInk,
+                                        modifier = Modifier.size(11.dp)
+                                    )
+                                }
+                            }
+                            if (hasDub) {
+                                Box(
+                                    modifier = Modifier
+                                        .height(17.dp)
+                                        .width(20.dp)
+                                        .clip(RoundedCornerShape(50))
+                                        .background(AppColors.DubPill),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = AppIcons.Mic,
+                                        contentDescription = "Dub",
+                                        tint = AppColors.AudioBadgeInk,
+                                        modifier = Modifier.size(11.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                     ConcaveCornerFlare(flareSize = flareSize, bgColor = notchBgColor, concaveAtBottomLeft = false)
@@ -847,7 +835,7 @@ fun MediaListRowCard(
                         else if (item.hasSub) "Sub"
                         else if (item.hasDub) "Dub"
                         else null,
-                        item.apiName.takeIf { it.isNotBlank() }
+                        item.apiName.takeIf { it.isNotBlank() }?.let { abbreviateProviderName(it) }
                     ).joinToString(" • ")
                     if (subline.isNotBlank()) {
                         Text(
@@ -968,6 +956,43 @@ fun ErrorStateView(
     }
 }
 
+/**
+ * Smart auto-shrinking text for fixed-size grid boxes (Season 3-col grid, Home Provider 2-col grid).
+ * Automatically shrinks font size step-by-step whenever text overflows width or maxLines.
+ */
+@Composable
+fun AutoFitGridText(
+    text: String,
+    color: Color,
+    maxFontSizeSp: Float = 13f,
+    minFontSizeSp: Float = 8f,
+    maxLines: Int = 3,
+    fontWeight: FontWeight = FontWeight.SemiBold,
+    textAlign: TextAlign = TextAlign.Center,
+    modifier: Modifier = Modifier
+) {
+    var fontSizeSp by remember(text, maxFontSizeSp, maxLines) { mutableFloatStateOf(maxFontSizeSp) }
+    Text(
+        text = text,
+        color = color,
+        style = TextStyle(
+            fontSize = fontSizeSp.sp,
+            fontWeight = fontWeight,
+            lineHeight = (fontSizeSp * 1.2f).sp,
+            textAlign = textAlign,
+            platformStyle = PlatformTextStyle(includeFontPadding = false)
+        ),
+        maxLines = maxLines,
+        overflow = TextOverflow.Ellipsis,
+        onTextLayout = { result ->
+            if (result.hasVisualOverflow && fontSizeSp > minFontSizeSp) {
+                fontSizeSp = (fontSizeSp - 0.8f).coerceAtLeast(minFontSizeSp)
+            }
+        },
+        modifier = modifier
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProviderPickerSheet(
@@ -977,6 +1002,8 @@ fun ProviderPickerSheet(
     onManageProviders: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val gridRows = remember(providers) { providers.chunked(2) }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = AppColors.Surface,
@@ -985,7 +1012,8 @@ fun ProviderPickerSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 28.dp)
+                .navigationBarsPadding()
+                .padding(bottom = 24.dp)
         ) {
             Row(
                 modifier = Modifier
@@ -1012,51 +1040,66 @@ fun ProviderPickerSheet(
             HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
 
             LazyColumn(
-                modifier = Modifier.heightIn(max = 380.dp)
+                modifier = Modifier.heightIn(max = 400.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(providers, key = { it.key }) { entry ->
-                    val isSelected = activeProvider?.key == entry.key
+                items(gridRows.size, key = { "prov_row_$it" }) { rowIdx ->
+                    val rowItems = gridRows[rowIdx]
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                onSelect(entry)
-                                onDismiss()
-                            }
-                            .padding(horizontal = 20.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = entry.displayName,
-                                color = if (isSelected) AppColors.Primary else AppColors.TextPrimary,
-                                fontSize = 15.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                            )
-                            val meta = listOfNotNull(
+                        rowItems.forEach { entry ->
+                            val isSelected = activeProvider?.key == entry.key
+                            val metaSubtitle = listOfNotNull(
                                 if (entry.isStremio) "Stremio" else if (entry.isDuplicateName) entry.sourceLabel else null,
-                                entry.api.lang.uppercase().takeIf { it.isNotBlank() && !entry.isStremio },
-                                entry.api.supportedTypes.take(3).joinToString(" • ") { it.name }.takeIf { it.isNotBlank() }
-                            ).joinToString("  •  ")
-                            if (meta.isNotBlank()) {
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(meta, color = AppColors.TextMuted, fontSize = 12.sp)
+                                entry.api.lang.uppercase().takeIf { it.isNotBlank() && !entry.isStremio }
+                            ).joinToString(" • ")
+
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(66.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (isSelected) AppColors.Primary else AppColors.SurfaceCard)
+                                    .border(
+                                        width = if (isSelected) 0.dp else 0.75.dp,
+                                        color = if (isSelected) Color.Transparent else AppColors.Border,
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    .clickable {
+                                        onSelect(entry)
+                                        onDismiss()
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                AutoFitGridText(
+                                    text = entry.shortDisplayName,
+                                    color = if (isSelected) AppColors.OnPrimary else AppColors.TextPrimary,
+                                    maxFontSizeSp = 13.5f,
+                                    minFontSizeSp = 9f,
+                                    maxLines = 2,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold
+                                )
+                                if (metaSubtitle.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(3.dp))
+                                    Text(
+                                        text = metaSubtitle,
+                                        color = if (isSelected) AppColors.OnPrimary.copy(alpha = 0.72f) else AppColors.TextMuted,
+                                        fontSize = 10.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
-                        if (isSelected) {
-                            Icon(
-                                imageVector = Icons.Filled.Check,
-                                contentDescription = "Selected",
-                                tint = AppColors.Primary,
-                                modifier = Modifier.size(20.dp)
-                            )
+                        repeat(2 - rowItems.size) {
+                            Spacer(modifier = Modifier.weight(1f))
                         }
                     }
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 20.dp),
-                        thickness = 0.5.dp,
-                        color = AppColors.Divider
-                    )
                 }
             }
         }

@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,10 +26,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -57,13 +60,17 @@ import com.xtsream.app.data.MetaUiData
 import com.xtsream.app.data.WatchlistStore
 import com.xtsream.app.ui.components.AppIcons
 import com.xtsream.app.ui.components.AppToastManager
+import com.xtsream.app.ui.components.AutoFitGridText
 import com.xtsream.app.ui.components.ErrorStateView
+import com.xtsream.app.ui.components.M3InlineSpinner
 import com.xtsream.app.ui.components.M3LoadingView
 import com.xtsream.app.ui.components.NotchedEpisodeThumbnail
 import com.xtsream.app.ui.components.PosterCard
 import com.xtsream.app.ui.components.buildCoilRequest
 import com.xtsream.app.ui.theme.AppColors
 import com.xtsream.app.viewmodel.MetaViewModel
+import com.xtsream.app.viewmodel.StreamServerItem
+import com.xtsream.app.viewmodel.StreamSheetState
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -76,9 +83,7 @@ private enum class ActiveMetaPanel {
     None,
     Description,
     Season,
-    Range,
-    Dub,
-    EpisodeDetail
+    Range
 }
 
 @Composable
@@ -91,6 +96,7 @@ fun MetaScreen(
     LaunchedEffect(item.apiKey, item.url) { vm.load(item) }
 
     val state by vm.uiState.collectAsState()
+    val streamState by vm.streamState.collectAsState()
     val watchlist by WatchlistStore.watchlist.collectAsState()
     val isSaved = remember(watchlist, item.url) { watchlist.any { it.url == item.url } }
 
@@ -155,6 +161,7 @@ fun MetaScreen(
                     meta = meta,
                     fallbackItem = item,
                     isSaved = isSaved,
+                    streamState = streamState,
                     onBack = onBack,
                     onToggleWatchlist = {
                         val saveItem = MediaCardItem(
@@ -175,6 +182,11 @@ fun MetaScreen(
                             if (added) "Added to My List" else "Removed from My List"
                         )
                     },
+                    onEpisodeClick = { ep -> vm.openStreamsForEpisode(meta, ep) },
+                    onMovieServersClick = { vm.openStreamsForMovie(meta) },
+                    onMinimizeStreams = { vm.minimizeStreams() },
+                    onExpandStreams = { vm.expandStreams() },
+                    onRetryStreams = { vm.retryStreams() },
                     onMediaClick = onMediaClick
                 )
             }
@@ -187,31 +199,31 @@ private fun MetaLoadedContent(
     meta: MetaUiData,
     fallbackItem: MediaCardItem,
     isSaved: Boolean,
+    streamState: StreamSheetState,
     onBack: () -> Unit,
     onToggleWatchlist: () -> Unit,
+    onEpisodeClick: (MetaEpisodeItem) -> Unit,
+    onMovieServersClick: () -> Unit,
+    onMinimizeStreams: () -> Unit,
+    onExpandStreams: () -> Unit,
+    onRetryStreams: () -> Unit,
     onMediaClick: (MediaCardItem, Rect?) -> Unit
 ) {
     val context = LocalContext.current
 
     var activePanel by remember(meta.url) { mutableStateOf(ActiveMetaPanel.None) }
-    var selectedDub by remember(meta.url) { mutableStateOf(meta.defaultDubKey) }
-    var selectedSeasonIndex by remember(meta.url, selectedDub) { mutableIntStateOf(0) }
-    var selectedRangeIndex by remember(meta.url, selectedDub, selectedSeasonIndex) { mutableIntStateOf(0) }
+    var selectedSeasonIndex by remember(meta.url) { mutableIntStateOf(0) }
+    var selectedRangeIndex by remember(meta.url, selectedSeasonIndex) { mutableIntStateOf(0) }
     var reverseOrder by remember(meta.url) { mutableStateOf(false) }
     var episodeLayout by remember { mutableStateOf(EpisodeLayoutMode.Detailed) }
-    var selectedEpisodeForPanel by remember(meta.url) { mutableStateOf<MetaEpisodeItem?>(null) }
 
-    val seasons = remember(meta.dubStatusMap, selectedDub) {
-        meta.dubStatusMap[selectedDub].orEmpty()
-    }
-    val currentSeason = seasons.getOrNull(selectedSeasonIndex)
-    val baseSeasonEpisodes = remember(currentSeason) {
-        currentSeason?.episodes.orEmpty()
-    }
-    val hasEpisodes = meta.dubStatusMap.values.any { list -> list.any { it.episodes.isNotEmpty() } }
+    val seasons = remember(meta.seasons) { meta.seasons }
+    val safeSeasonIndex = selectedSeasonIndex.coerceIn(0, (seasons.size - 1).coerceAtLeast(0))
+    val currentSeason = seasons.getOrNull(safeSeasonIndex)
+    val baseSeasonEpisodes = remember(currentSeason) { currentSeason?.episodes.orEmpty() }
+    val hasEpisodes = seasons.any { it.episodes.isNotEmpty() }
 
-    // CRITICAL FIX: Chunk raw ascending episodes into 50-ep ranges FIRST,
-    // pick the active range, and ONLY reverse the selected range (e.g., 1..50 <-> 50..1)!
+    // Chunk raw ascending episodes into 50-ep ranges FIRST, then reverse ONLY the active chunk
     val chunkSize = 50
     val rawEpisodeChunks = remember(baseSeasonEpisodes) {
         if (baseSeasonEpisodes.size > chunkSize) baseSeasonEpisodes.chunked(chunkSize)
@@ -223,15 +235,22 @@ private fun MetaLoadedContent(
         if (reverseOrder) activeChunk.asReversed() else activeChunk
     }
 
+    // Hide hero title overlay whenever Description OR Streams panel is open
+    val hideHeroTitle = activePanel == ActiveMetaPanel.Description || streamState.isExpanded
+    val showMinimizedBar = streamState.isMinimized && !streamState.isExpanded
+
     // Non-duplicated Left-Label / Right-Value details rows inside Description Panel
-    // (Source, Type, Release, and Rating are already displayed in the top stats strip — never repeated here!)
     val detailRows = remember(meta) {
         buildList {
             meta.durationMinutes?.takeIf { it > 0 }?.let { add("Runtime" to "$it min") }
             meta.showStatus?.takeIf { it.isNotBlank() }?.let { add("Status" to it) }
             meta.contentRating?.takeIf { it.isNotBlank() }?.let { add("Rated" to it) }
-            if (meta.dubStatusMap.size > 1) {
-                add("Audio" to meta.dubStatusMap.keys.joinToString(" / "))
+            if (meta.hasAnySub || meta.hasAnyDub) {
+                val audioText = listOfNotNull(
+                    if (meta.hasAnySub) "Sub" else null,
+                    if (meta.hasAnyDub) "Dub" else null
+                ).joinToString(" / ")
+                if (audioText.isNotBlank()) add("Audio" to audioText)
             }
             if (meta.tags.isNotEmpty()) {
                 add("Genres" to meta.tags.take(10).joinToString(", "))
@@ -244,7 +263,7 @@ private fun MetaLoadedContent(
             modifier = Modifier
                 .fillMaxSize()
                 .navigationBarsPadding(),
-            contentPadding = PaddingValues(bottom = 36.dp)
+            contentPadding = PaddingValues(bottom = if (showMinimizedBar) 92.dp else 36.dp)
         ) {
             // 1. Full-Bleed Top Hero Artwork + Gradient Scrim + Title + Quick Meta
             item(key = "hero_backdrop") {
@@ -306,50 +325,59 @@ private fun MetaLoadedContent(
                         }
                     }
 
-                    Column(
+                    // Title & quick meta hidden cleanly whenever Description or Streams panel is open
+                    AnimatedVisibility(
+                        visible = !hideHeroTitle,
+                        enter = fadeIn(tween(180)),
+                        exit = fadeOut(tween(140)),
                         modifier = Modifier
                             .align(Alignment.BottomStart)
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
                     ) {
-                        Text(
-                            text = meta.title,
-                            color = AppColors.Primary,
-                            fontSize = 25.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            lineHeight = 30.sp,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis
-                        )
-
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
                         ) {
-                            if (!meta.score.isNullOrBlank()) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Filled.Star, null, tint = AppColors.Gold, modifier = Modifier.size(13.dp))
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text(meta.score, color = AppColors.Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = meta.title,
+                                color = AppColors.Primary,
+                                fontSize = 25.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                lineHeight = 30.sp,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis
+                            )
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (!meta.score.isNullOrBlank()) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Filled.Star, null, tint = AppColors.Gold, modifier = Modifier.size(13.dp))
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text(meta.score, color = AppColors.Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
                                 }
-                            }
-                            val quickLine = listOfNotNull(
-                                meta.typeLabel.takeIf { it.isNotBlank() },
-                                meta.year?.takeIf { it > 0 }?.toString(),
-                                meta.showStatus?.takeIf { it.isNotBlank() },
-                                meta.durationMinutes?.takeIf { it > 0 }?.let { "${it}m" }
-                            ).joinToString("  •  ")
-                            if (quickLine.isNotBlank()) {
-                                Text(
-                                    text = quickLine,
-                                    color = AppColors.TextSecondary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                val quickLine = listOfNotNull(
+                                    meta.typeLabel.takeIf { it.isNotBlank() },
+                                    meta.year?.takeIf { it > 0 }?.toString(),
+                                    meta.showStatus?.takeIf { it.isNotBlank() },
+                                    meta.durationMinutes?.takeIf { it > 0 }?.let { "${it}m" }
+                                ).joinToString("  •  ")
+                                if (quickLine.isNotBlank()) {
+                                    Text(
+                                        text = quickLine,
+                                        color = AppColors.TextSecondary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }
@@ -361,7 +389,10 @@ private fun MetaLoadedContent(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { activePanel = ActiveMetaPanel.Description }
+                        .clickable {
+                            if (streamState.isExpanded) onMinimizeStreams()
+                            activePanel = ActiveMetaPanel.Description
+                        }
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.Bottom
                 ) {
@@ -395,7 +426,7 @@ private fun MetaLoadedContent(
                 }
             }
 
-            // 3. Primary Watchlist Action Button
+            // 3. Primary Actions (Movies also get a direct Servers button alongside My List)
             item(key = "watchlist_action") {
                 Row(
                     modifier = Modifier
@@ -403,33 +434,86 @@ private fun MetaLoadedContent(
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Button(
-                        onClick = onToggleWatchlist,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isSaved) AppColors.SurfaceElevated else AppColors.Primary,
-                            contentColor = if (isSaved) AppColors.Primary else AppColors.OnPrimary
-                        ),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(44.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isSaved) AppIcons.Bookmark else AppIcons.BookmarkBorder,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (isSaved) "In My List" else "Add to My List",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
-                        )
+                    if (!hasEpisodes && (meta.isMovieLike || !meta.movieDataUrl.isNullOrBlank())) {
+                        Button(
+                            onClick = {
+                                activePanel = ActiveMetaPanel.None
+                                onMovieServersClick()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = AppColors.Primary,
+                                contentColor = AppColors.OnPrimary
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.PlayArrow,
+                                contentDescription = null,
+                                modifier = Modifier.size(19.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Servers",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                        }
+
+                        Button(
+                            onClick = onToggleWatchlist,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = AppColors.SurfaceElevated,
+                                contentColor = AppColors.Primary
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isSaved) AppIcons.Bookmark else AppIcons.BookmarkBorder,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(7.dp))
+                            Text(
+                                text = if (isSaved) "In My List" else "My List",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp
+                            )
+                        }
+                    } else {
+                        Button(
+                            onClick = onToggleWatchlist,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSaved) AppColors.SurfaceElevated else AppColors.Primary,
+                                contentColor = if (isSaved) AppColors.Primary else AppColors.OnPrimary
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isSaved) AppIcons.Bookmark else AppIcons.BookmarkBorder,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (isSaved) "In My List" else "Add to My List",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                        }
                     }
                 }
             }
 
-            // 4. Episodes Section
+            // 4. Episodes Section (Unified list — NO Sub/Dub dropdown at top!)
             if (hasEpisodes) {
                 item(key = "episodes_header_bar") {
                     Column(
@@ -498,9 +582,8 @@ private fun MetaLoadedContent(
 
                         val showSeasonPicker = seasons.size > 1
                         val showRangePicker = rawEpisodeChunks.size > 1
-                        val showDubPicker = meta.dubStatusMap.size > 1
 
-                        if (showSeasonPicker || showRangePicker || showDubPicker) {
+                        if (showSeasonPicker || showRangePicker) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -511,7 +594,10 @@ private fun MetaLoadedContent(
                                 if (showSeasonPicker) {
                                     DropdownTriggerChip(
                                         label = currentSeason?.displayName ?: "Season 1",
-                                        onClick = { activePanel = ActiveMetaPanel.Season }
+                                        onClick = {
+                                            if (streamState.isExpanded) onMinimizeStreams()
+                                            activePanel = ActiveMetaPanel.Season
+                                        }
                                     )
                                 }
                                 if (showRangePicker) {
@@ -519,13 +605,10 @@ private fun MetaLoadedContent(
                                     val end = minOf((safeRangeIndex + 1) * chunkSize, baseSeasonEpisodes.size)
                                     DropdownTriggerChip(
                                         label = formatRangeLabel(start, end),
-                                        onClick = { activePanel = ActiveMetaPanel.Range }
-                                    )
-                                }
-                                if (showDubPicker) {
-                                    DropdownTriggerChip(
-                                        label = selectedDub,
-                                        onClick = { activePanel = ActiveMetaPanel.Dub }
+                                        onClick = {
+                                            if (streamState.isExpanded) onMinimizeStreams()
+                                            activePanel = ActiveMetaPanel.Range
+                                        }
                                     )
                                 }
                             }
@@ -543,8 +626,8 @@ private fun MetaLoadedContent(
                                 fallbackPoster = meta.backgroundUrl ?: meta.posterUrl,
                                 headers = meta.posterHeaders,
                                 onClick = {
-                                    selectedEpisodeForPanel = ep
-                                    activePanel = ActiveMetaPanel.EpisodeDetail
+                                    activePanel = ActiveMetaPanel.None
+                                    onEpisodeClick(ep)
                                 }
                             )
                         }
@@ -555,8 +638,8 @@ private fun MetaLoadedContent(
                             BorderlessCompactEpisodeRow(
                                 episode = ep,
                                 onClick = {
-                                    selectedEpisodeForPanel = ep
-                                    activePanel = ActiveMetaPanel.EpisodeDetail
+                                    activePanel = ActiveMetaPanel.None
+                                    onEpisodeClick(ep)
                                 }
                             )
                         }
@@ -580,8 +663,8 @@ private fun MetaLoadedContent(
                                             .clip(RoundedCornerShape(8.dp))
                                             .background(AppColors.SurfaceCard)
                                             .clickable {
-                                                selectedEpisodeForPanel = ep
-                                                activePanel = ActiveMetaPanel.EpisodeDetail
+                                                activePanel = ActiveMetaPanel.None
+                                                onEpisodeClick(ep)
                                             },
                                         contentAlignment = Alignment.Center
                                     ) {
@@ -635,13 +718,30 @@ private fun MetaLoadedContent(
             }
         }
 
-        // --- Hard YouTube-Style Docked Panels (rises right up to backdrop, header-only drag to close above white line) ---
+        // --- Minimized Rectangular Bottom Bar (e.g. "S01 • EP04") ---
+        AnimatedVisibility(
+            visible = showMinimizedBar,
+            enter = slideInVertically(initialOffsetY = { it }, animationSpec = tween(200)) + fadeIn(tween(160)),
+            exit = slideOutVertically(targetOffsetY = { it }, animationSpec = tween(180)) + fadeOut(tween(140)),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            MinimizedStreamBottomBar(
+                streamState = streamState,
+                onExpand = {
+                    activePanel = ActiveMetaPanel.None
+                    onExpandStreams()
+                }
+            )
+        }
 
-        // 1. Description Panel
+        // --- Hard YouTube-Style Docked Panels ---
+
+        // 1. Description Panel (NO black shadow scrim behind it; hero title hidden while open)
         HardDockedPanel(
             visible = activePanel == ActiveMetaPanel.Description,
             title = "Description",
             heightFraction = 0.64f,
+            showScrim = false,
             onDismiss = { activePanel = ActiveMetaPanel.None }
         ) {
             DescriptionPanelBody(
@@ -650,53 +750,61 @@ private fun MetaLoadedContent(
             )
         }
 
-        // 2. Season Picker Panel
+        // 2. Season Picker Panel — Equal-Size 3-Column Grid with Smart Auto-Fit Text (up to 3 lines)
         HardDockedPanel(
             visible = activePanel == ActiveMetaPanel.Season,
             title = "Select Season",
             heightFraction = 0.54f,
+            showScrim = true,
             onDismiss = { activePanel = ActiveMetaPanel.None }
         ) {
+            val seasonRows = remember(seasons) { seasons.withIndex().toList().chunked(3) }
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 24.dp)
+                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(seasons.size) { idx ->
-                    val season = seasons[idx]
-                    val selected = idx == selectedSeasonIndex
+                items(seasonRows.size, key = { "season_grid_$it" }) { rowIdx ->
+                    val rowItems = seasonRows[rowIdx]
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                selectedSeasonIndex = idx
-                                selectedRangeIndex = 0
-                                activePanel = ActiveMetaPanel.None
-                            }
-                            .padding(horizontal = 20.dp, vertical = 15.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = season.displayName,
-                                color = if (selected) AppColors.Primary else AppColors.TextPrimary,
-                                fontSize = 15.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-                            )
-                            Text(
-                                text = "${season.episodes.size} episodes",
-                                color = AppColors.TextMuted,
-                                fontSize = 12.sp
-                            )
+                        rowItems.forEach { (idx, season) ->
+                            val selected = idx == safeSeasonIndex
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(68.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (selected) AppColors.Primary else AppColors.SurfaceCard)
+                                    .border(
+                                        width = if (selected) 0.dp else 0.75.dp,
+                                        color = if (selected) Color.Transparent else AppColors.Border,
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    .clickable {
+                                        selectedSeasonIndex = idx
+                                        selectedRangeIndex = 0
+                                        activePanel = ActiveMetaPanel.None
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                AutoFitGridText(
+                                    text = season.displayName,
+                                    color = if (selected) AppColors.OnPrimary else AppColors.TextPrimary,
+                                    maxFontSizeSp = 13f,
+                                    minFontSizeSp = 7.5f,
+                                    maxLines = 3,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold
+                                )
+                            }
                         }
-                        if (selected) {
-                            Icon(Icons.Filled.Check, null, tint = AppColors.Primary, modifier = Modifier.size(20.dp))
+                        repeat(3 - rowItems.size) {
+                            Spacer(modifier = Modifier.weight(1f))
                         }
                     }
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 20.dp),
-                        thickness = 0.5.dp,
-                        color = AppColors.Divider
-                    )
                 }
             }
         }
@@ -706,6 +814,7 @@ private fun MetaLoadedContent(
             visible = activePanel == ActiveMetaPanel.Range,
             title = "Episode Range",
             heightFraction = 0.52f,
+            showScrim = true,
             onDismiss = { activePanel = ActiveMetaPanel.None }
         ) {
             val rangeLabels = remember(rawEpisodeChunks, baseSeasonEpisodes.size) {
@@ -722,7 +831,7 @@ private fun MetaLoadedContent(
                 contentPadding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(gridRows.size) { rowIdx ->
+                items(gridRows.size, key = { "range_grid_$it" }) { rowIdx ->
                     val rowItems = gridRows[rowIdx]
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -764,76 +873,303 @@ private fun MetaLoadedContent(
             }
         }
 
-        // 4. Audio / Track Picker Panel
+        // 4. Real-Time Stream Servers Panel (Half-screen docked, NO black shadow scrim, hero title hidden, closes into bottom rectangular bar)
         HardDockedPanel(
-            visible = activePanel == ActiveMetaPanel.Dub,
-            title = "Audio / Track",
-            heightFraction = 0.44f,
-            onDismiss = { activePanel = ActiveMetaPanel.None }
+            visible = streamState.isExpanded,
+            title = streamState.barLabel.ifBlank { "Servers" },
+            heightFraction = 0.64f,
+            showScrim = false,
+            onDismiss = onMinimizeStreams
         ) {
-            val dubKeys = remember(meta.dubStatusMap) { meta.dubStatusMap.keys.toList() }
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 24.dp)
-            ) {
-                items(dubKeys.size) { idx ->
-                    val key = dubKeys[idx]
-                    val selected = key == selectedDub
-                    val epTotal = meta.dubStatusMap[key]?.sumOf { it.episodes.size } ?: 0
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                selectedDub = key
-                                selectedSeasonIndex = 0
-                                selectedRangeIndex = 0
-                                activePanel = ActiveMetaPanel.None
-                            }
-                            .padding(horizontal = 20.dp, vertical = 15.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = key,
-                                color = if (selected) AppColors.Primary else AppColors.TextPrimary,
-                                fontSize = 15.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-                            )
-                            Text(
-                                text = "$epTotal episodes",
-                                color = AppColors.TextMuted,
-                                fontSize = 12.sp
-                            )
-                        }
-                        if (selected) {
-                            Icon(Icons.Filled.Check, null, tint = AppColors.Primary, modifier = Modifier.size(20.dp))
-                        }
+            StreamServersPanelBody(
+                streamState = streamState,
+                onRetry = onRetryStreams
+            )
+        }
+    }
+}
+
+@Composable
+private fun MinimizedStreamBottomBar(
+    streamState: StreamSheetState,
+    onExpand: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(AppColors.SurfaceElevated)
+            .clickable { onExpand() }
+            .navigationBarsPadding()
+    ) {
+        HorizontalDivider(thickness = 0.8.dp, color = AppColors.BorderStrong)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp)
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = streamState.barLabel.ifBlank { "Servers" },
+                        color = AppColors.Primary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                    if (streamState.isLoading) {
+                        M3InlineSpinner(size = 14.dp, color = AppColors.TextSecondary)
                     }
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 20.dp),
-                        thickness = 0.5.dp,
-                        color = AppColors.Divider
+                    val statusText = when {
+                        streamState.isLoading && streamState.servers.isEmpty() -> "Loading..."
+                        streamState.isLoading -> "${streamState.servers.size} found..."
+                        streamState.servers.isNotEmpty() -> "${streamState.servers.size} ${if (streamState.servers.size == 1) "server" else "servers"}"
+                        else -> "No servers"
+                    }
+                    Text(
+                        text = statusText,
+                        color = AppColors.TextSecondary,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (streamState.subtitle.isNotBlank()) {
+                    Text(
+                        text = streamState.subtitle,
+                        color = AppColors.TextMuted,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
+            Icon(
+                imageVector = Icons.Filled.KeyboardArrowUp,
+                contentDescription = "Expand servers",
+                tint = AppColors.Primary,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun StreamServersPanelBody(
+    streamState: StreamSheetState,
+    onRetry: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Subtitle + Live Status Row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = streamState.subtitle.ifBlank { streamState.barLabel },
+                color = AppColors.TextSecondary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            if (streamState.isLoading) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    M3InlineSpinner(size = 16.dp, color = AppColors.Primary)
+                    Text(
+                        text = if (streamState.servers.isEmpty()) "Loading..." else "${streamState.servers.size} found",
+                        color = AppColors.TextMuted,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            } else if (streamState.servers.isNotEmpty()) {
+                Text(
+                    text = "${streamState.servers.size} ${if (streamState.servers.size == 1) "server" else "servers"}",
+                    color = AppColors.TextMuted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
 
-        // 5. Episode Info Panel
-        HardDockedPanel(
-            visible = activePanel == ActiveMetaPanel.EpisodeDetail && selectedEpisodeForPanel != null,
-            title = selectedEpisodeForPanel?.number?.let { "Episode $it" } ?: "Episode Details",
-            heightFraction = 0.62f,
-            onDismiss = {
-                activePanel = ActiveMetaPanel.None
-                selectedEpisodeForPanel = null
+        HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
+
+        when {
+            streamState.isLoading && streamState.servers.isEmpty() -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        M3InlineSpinner(size = 34.dp, color = AppColors.Primary)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Fetching stream servers...",
+                            color = AppColors.TextSecondary,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
             }
-        ) {
-            selectedEpisodeForPanel?.let { ep ->
-                EpisodeDetailPanelBody(
-                    episode = ep,
-                    fallbackPoster = meta.backgroundUrl ?: meta.posterUrl,
-                    headers = meta.posterHeaders
+
+            !streamState.isLoading && streamState.servers.isEmpty() -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(horizontal = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = streamState.errorMessage ?: "No stream servers found.",
+                            color = AppColors.TextSecondary,
+                            fontSize = 14.sp,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        OutlinedButton(
+                            onClick = onRetry,
+                            border = BorderStroke(1.dp, AppColors.BorderStrong),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Filled.Refresh, null, tint = AppColors.TextPrimary, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Retry", color = AppColors.TextPrimary, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+
+            else -> {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    itemsIndexed(
+                        items = streamState.servers,
+                        key = { idx, srv -> "srv_${idx}_${srv.id}" }
+                    ) { _, server ->
+                        StreamServerRow(server = server)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Display-only server row (clicking does nothing for now).
+ */
+@Composable
+private fun StreamServerRow(server: StreamServerItem) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(AppColors.SurfaceCard)
+            .border(0.6.dp, AppColors.Border, RoundedCornerShape(10.dp))
+            .clickable { /* Display-only for now; player not wired yet */ }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = server.name,
+                    color = AppColors.TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
+            }
+
+            if (!server.extraInfo.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = server.extraInfo,
+                    color = AppColors.TextMuted,
+                    fontSize = 11.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 15.sp
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(10.dp))
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            if (!server.audioTag.isNullOrBlank()) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(AppColors.SubPill)
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = server.audioTag,
+                        color = AppColors.AudioBadgeInk,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+            }
+            if (server.qualityLabel.isNotBlank()) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(AppColors.Primary)
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = server.qualityLabel,
+                        color = AppColors.OnPrimary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+            }
+            if (server.typeBadge.isNotBlank()) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(AppColors.EpisodePill)
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = server.typeBadge,
+                        color = AppColors.TextSecondary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }
@@ -848,15 +1184,15 @@ private fun formatRangeLabel(start: Int, end: Int): String {
 /**
  * Hard YouTube-Style Docked Bottom Panel:
  * - Anchored cleanly to bottom of Meta screen, rising up to meet the top poster/backdrop.
- * - Header contains title + top-right X close icon + crisp white divider line directly underneath.
- * - Swiping/dragging down ONLY works on the header area ABOVE the white line.
- * - Scrolling content BELOW the white line NEVER drags or closes the panel.
+ * - Optional scrim ([showScrim] = false draws ZERO black shadow behind Description / Streams).
+ * - Swiping/dragging down ONLY works on the header area ABOVE the white divider line.
  */
 @Composable
 private fun HardDockedPanel(
     visible: Boolean,
     title: String,
     heightFraction: Float = 0.64f,
+    showScrim: Boolean = true,
     onDismiss: () -> Unit,
     content: @Composable BoxScope.() -> Unit
 ) {
@@ -868,7 +1204,7 @@ private fun HardDockedPanel(
     val dismissThresholdPx = with(density) { 78.dp.toPx() }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Subtle scrim over the top hero area (tapping backdrop closes panel)
+        // Tap-above-panel dismiss zone (transparent when showScrim = false so NO black shadow appears!)
         AnimatedVisibility(
             visible = visible,
             enter = fadeIn(tween(180)),
@@ -877,7 +1213,7 @@ private fun HardDockedPanel(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.32f))
+                    .background(if (showScrim) Color.Black.copy(alpha = 0.32f) else Color.Transparent)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
@@ -939,7 +1275,6 @@ private fun HardDockedPanel(
                             )
                         }
                 ) {
-                    // Subtle grip bar inside header
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -978,7 +1313,6 @@ private fun HardDockedPanel(
                         }
                     }
 
-                    // Crisp white horizontal divider line separating drag-header from scrollable body
                     HorizontalDivider(
                         thickness = 1.dp,
                         color = Color.White.copy(alpha = 0.85f)
@@ -1002,14 +1336,6 @@ private fun HardDockedPanel(
     }
 }
 
-/**
- * YouTube-style Description Panel Body:
- * - Title
- * - Equal-width centered stats strip: ONLY {source (meta.apiName)} • {type} • {release} • {rating}
- * - Full Synopsis
- * - Non-duplicated Left-Label / Right-Value Info Table
- * - Cast Carousel
- */
 @Composable
 private fun DescriptionPanelBody(
     meta: MetaUiData,
@@ -1030,10 +1356,10 @@ private fun DescriptionPanelBody(
             lineHeight = 23.sp
         )
 
-        // Equal-width centered stats strip: ONLY Source (clean apiName), Type, Release, Rating
-        val stats = remember(meta.apiName, meta.typeLabel, meta.year, meta.score) {
+        // Equal-width centered stats strip: Source (shortDisplayName), Type, Release, Rating
+        val stats = remember(meta.sourceDisplayName, meta.typeLabel, meta.year, meta.score) {
             buildList {
-                meta.apiName.trim().takeIf { it.isNotBlank() }?.let { add(it to "Source") }
+                meta.sourceDisplayName.trim().takeIf { it.isNotBlank() }?.let { add(it to "Source") }
                 meta.typeLabel.trim().takeIf { it.isNotBlank() }?.let { add(it to "Type") }
                 meta.year?.takeIf { it > 0 }?.let { add(it.toString() to "Release") }
                 meta.score?.takeIf { it.isNotBlank() }?.let { add("★ $it" to "Rating") }
@@ -1083,7 +1409,6 @@ private fun DescriptionPanelBody(
             )
         }
 
-        // Structured Left-Label / Right-Value Info Table (no duplicate Source/Type/Year/Rating!)
         if (detailRows.isNotEmpty()) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 HorizontalDivider(thickness = 0.5.dp, color = AppColors.Divider)
@@ -1160,7 +1485,9 @@ private fun DropdownTriggerChip(
             color = AppColors.TextPrimary,
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
-            maxLines = 1
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 180.dp)
         )
         Spacer(modifier = Modifier.width(4.dp))
         Icon(
@@ -1251,6 +1578,8 @@ private fun BorderlessDetailedEpisodeRow(
                     headers = headers,
                     episodeNumber = episode.number,
                     score = episode.score,
+                    hasSub = episode.hasSub,
+                    hasDub = episode.hasDub,
                     notchBgColor = AppColors.Background,
                     modifier = Modifier.width(138.dp)
                 )
@@ -1345,6 +1674,45 @@ private fun BorderlessCompactEpisodeRow(
                     )
                 }
             }
+            if (episode.hasSub || episode.hasDub) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (episode.hasSub) {
+                        Box(
+                            modifier = Modifier
+                                .height(18.dp)
+                                .width(20.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(AppColors.SubPill),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = AppIcons.ClosedCaption,
+                                contentDescription = "Sub",
+                                tint = AppColors.AudioBadgeInk,
+                                modifier = Modifier.size(11.dp)
+                            )
+                        }
+                    }
+                    if (episode.hasDub) {
+                        Box(
+                            modifier = Modifier
+                                .height(18.dp)
+                                .width(20.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(AppColors.DubPill),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = AppIcons.Mic,
+                                contentDescription = "Dub",
+                                tint = AppColors.AudioBadgeInk,
+                                modifier = Modifier.size(11.dp)
+                            )
+                        }
+                    }
+                }
+            }
             if (episode.runTime != null && episode.runTime > 0) {
                 Spacer(modifier = Modifier.width(10.dp))
                 Text("${episode.runTime}m", color = AppColors.TextMuted, fontSize = 12.sp)
@@ -1355,99 +1723,5 @@ private fun BorderlessCompactEpisodeRow(
             thickness = 0.5.dp,
             color = AppColors.Divider
         )
-    }
-}
-
-@Composable
-private fun EpisodeDetailPanelBody(
-    episode: MetaEpisodeItem,
-    fallbackPoster: String?,
-    headers: Map<String, String>
-) {
-    val thumb = episode.posterUrl ?: fallbackPoster
-    val formattedDate = remember(episode.airDateMs) {
-        episode.airDateMs?.takeIf { it > 0L }?.let { ms ->
-            runCatching {
-                SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()).format(Date(ms))
-            }.getOrNull()
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        if (!thumb.isNullOrBlank()) {
-            NotchedEpisodeThumbnail(
-                imageUrl = thumb,
-                headers = headers,
-                episodeNumber = episode.number,
-                score = episode.score,
-                notchBgColor = AppColors.Surface,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            val badge = buildString {
-                if (episode.season != null) append("Season ${episode.season}  •  ")
-                if (episode.number != null) append("Episode ${episode.number}")
-            }
-            if (badge.isNotBlank()) {
-                Text(
-                    text = badge,
-                    color = AppColors.TextMuted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-            Text(
-                text = episode.title,
-                color = AppColors.TextPrimary,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            if (episode.runTime != null && episode.runTime > 0) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(AppIcons.Schedule, null, tint = AppColors.TextMuted, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("${episode.runTime} min", color = AppColors.TextSecondary, fontSize = 12.sp)
-                }
-            }
-            if (!episode.score.isNullOrBlank()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.Star, null, tint = AppColors.Gold, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(episode.score, color = AppColors.Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-            if (!formattedDate.isNullOrBlank()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(AppIcons.CalendarToday, null, tint = AppColors.TextMuted, modifier = Modifier.size(13.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(formattedDate, color = AppColors.TextSecondary, fontSize = 12.sp)
-                }
-            }
-        }
-
-        if (!episode.description.isNullOrBlank()) {
-            Text(
-                text = episode.description,
-                color = AppColors.TextSecondary,
-                fontSize = 14.sp,
-                lineHeight = 21.sp
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
     }
 }

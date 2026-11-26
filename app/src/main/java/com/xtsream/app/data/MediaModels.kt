@@ -4,8 +4,10 @@ import com.lagradost.cloudstream3.AnimeLoadResponse
 import com.lagradost.cloudstream3.AnimeSearchResponse
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
+import com.lagradost.cloudstream3.LiveStreamLoadResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainPageData
+import com.lagradost.cloudstream3.MovieLoadResponse
 import com.lagradost.cloudstream3.MovieSearchResponse
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
@@ -56,7 +58,11 @@ data class MetaEpisodeItem(
     val description: String?,
     val score: String?,
     val runTime: Int?,
-    val airDateMs: Long?
+    val airDateMs: Long?,
+    val hasSub: Boolean = false,
+    val hasDub: Boolean = false,
+    val subData: String? = null,
+    val dubData: String? = null
 )
 
 data class MetaSeasonGroup(
@@ -73,6 +79,7 @@ data class MetaUiData(
     val sourceDisplayName: String,
     val typeLabel: String,
     val isMovieLike: Boolean,
+    val movieDataUrl: String? = null,
     val posterUrl: String?,
     val backgroundUrl: String?,
     val logoUrl: String?,
@@ -87,6 +94,9 @@ data class MetaUiData(
     val actors: List<MetaActorItem>,
     val recommendations: List<MediaCardItem>,
     val comingSoon: Boolean,
+    val seasons: List<MetaSeasonGroup> = emptyList(),
+    val hasAnySub: Boolean = false,
+    val hasAnyDub: Boolean = false,
     val dubStatusMap: Map<String, List<MetaSeasonGroup>>,
     val defaultDubKey: String
 )
@@ -160,7 +170,9 @@ fun LoadResponse.toMetaUiData(
 
     val recs = recommendations.orEmpty().map { it.toMediaCardItem(apiKey = apiKey) }.distinctBy { it.url }
     val dubMap = linkedMapOf<String, List<MetaSeasonGroup>>()
+    var unifiedSeasons: List<MetaSeasonGroup> = emptyList()
     var showStatusLabel: String? = null
+    var movieDataUrl: String? = null
 
     when (this) {
         is TvSeriesLoadResponse -> {
@@ -169,6 +181,7 @@ fun LoadResponse.toMetaUiData(
                 it.season to (it.name ?: "Season ${it.displaySeason ?: it.season}")
             }
             val grouped = groupEpisodesIntoSeasons(episodes, seasonNameMap)
+            unifiedSeasons = grouped
             if (grouped.isNotEmpty()) {
                 dubMap["Default"] = grouped
             }
@@ -178,28 +191,31 @@ fun LoadResponse.toMetaUiData(
             val seasonNameMap = seasonNames.orEmpty().associate {
                 it.season to (it.name ?: "Season ${it.displaySeason ?: it.season}")
             }
-            episodes.forEach { (dubStatus, epList) ->
-                if (epList.isNotEmpty()) {
-                    val label = when (dubStatus) {
-                        DubStatus.Subbed -> "Sub"
-                        DubStatus.Dubbed -> "Dub"
-                        DubStatus.None -> "Episodes"
-                    }
-                    val grouped = groupEpisodesIntoSeasons(epList, seasonNameMap)
-                    if (grouped.isNotEmpty()) {
-                        dubMap[label] = grouped
-                    }
-                }
+            // Merge Sub & Dub into ONE unified season list so episodes show white Sub/Dub icon badges instead of a top dropdown!
+            val merged = mergeAnimeEpisodesIntoSeasons(episodes, seasonNameMap)
+            unifiedSeasons = merged
+            if (merged.isNotEmpty()) {
+                dubMap["Default"] = merged
             }
+        }
+        is MovieLoadResponse -> {
+            movieDataUrl = dataUrl.takeIf { it.isNotBlank() }
+        }
+        is LiveStreamLoadResponse -> {
+            movieDataUrl = dataUrl.takeIf { it.isNotBlank() }
         }
     }
 
-    val isMovieLike = dubMap.isEmpty() && (
+    val hasAnySub = unifiedSeasons.any { s -> s.episodes.any { it.hasSub } }
+    val hasAnyDub = unifiedSeasons.any { s -> s.episodes.any { it.hasDub } }
+
+    val isMovieLike = unifiedSeasons.isEmpty() && (
         type == TvType.Movie ||
             type == TvType.AnimeMovie ||
             type == TvType.OVA ||
             type == TvType.Documentary ||
-            type == TvType.Live
+            type == TvType.Live ||
+            !movieDataUrl.isNullOrBlank()
         )
 
     return MetaUiData(
@@ -210,6 +226,7 @@ fun LoadResponse.toMetaUiData(
         sourceDisplayName = sourceDisplayName,
         typeLabel = formatTvType(type),
         isMovieLike = isMovieLike,
+        movieDataUrl = movieDataUrl,
         posterUrl = posterUrl,
         backgroundUrl = backgroundPosterUrl?.takeIf { it.isNotBlank() } ?: posterUrl,
         logoUrl = logoUrl?.takeIf { it.isNotBlank() },
@@ -224,17 +241,69 @@ fun LoadResponse.toMetaUiData(
         actors = actorItems,
         recommendations = recs,
         comingSoon = comingSoon,
+        seasons = unifiedSeasons,
+        hasAnySub = hasAnySub,
+        hasAnyDub = hasAnyDub,
         dubStatusMap = dubMap,
         defaultDubKey = dubMap.keys.firstOrNull() ?: "Default"
     )
+}
+
+/**
+ * Deduplicates episodes strictly by normalized data ID (and same season+episode number)
+ * so duplicate episodes from extensions NEVER appear twice.
+ */
+private fun deduplicateRawEpisodes(episodes: List<Episode>): List<Episode> {
+    if (episodes.size <= 1) return episodes
+
+    // Step 1: Deduplicate identical episode data/IDs, keeping the richer metadata copy
+    val byId = linkedMapOf<String, Episode>()
+    for (ep in episodes) {
+        val key = ep.data.trim().ifBlank { "noid_${ep.season}_${ep.episode}_${ep.name}" }
+        val existing = byId[key]
+        if (existing == null || episodeRichnessScore(ep) > episodeRichnessScore(existing)) {
+            byId[key] = ep
+        }
+    }
+
+    // Step 2: Deduplicate identical explicit (season, episode) numbers within the same list
+    val result = mutableListOf<Episode>()
+    val seenSeasonEpIndex = mutableMapOf<Pair<Int, Int>, Int>()
+    for (ep in byId.values) {
+        val epNum = ep.episode
+        if (epNum != null && epNum > 0) {
+            val pair = (ep.season ?: 1) to epNum
+            val existingIdx = seenSeasonEpIndex[pair]
+            if (existingIdx == null) {
+                seenSeasonEpIndex[pair] = result.size
+                result.add(ep)
+            } else if (episodeRichnessScore(ep) > episodeRichnessScore(result[existingIdx])) {
+                result[existingIdx] = ep
+            }
+        } else {
+            result.add(ep)
+        }
+    }
+    return result
+}
+
+private fun episodeRichnessScore(ep: Episode): Int {
+    var score = 0
+    if (!ep.posterUrl.isNullOrBlank()) score += 3
+    if (!ep.description.isNullOrBlank()) score += 2
+    if (!ep.name.isNullOrBlank() && !ep.name!!.startsWith("Episode", ignoreCase = true)) score += 2
+    if (ep.runTime != null && ep.runTime!! > 0) score += 1
+    if (ep.date != null && ep.date!! > 0L) score += 1
+    return score
 }
 
 private fun groupEpisodesIntoSeasons(
     episodes: List<Episode>,
     seasonNameMap: Map<Int, String>
 ): List<MetaSeasonGroup> {
-    if (episodes.isEmpty()) return emptyList()
-    val grouped = episodes.groupBy { it.season ?: 1 }
+    val cleanEps = deduplicateRawEpisodes(episodes)
+    if (cleanEps.isEmpty()) return emptyList()
+    val grouped = cleanEps.groupBy { it.season ?: 1 }
     return grouped.entries
         .sortedBy { it.key }
         .map { (seasonNo, epList) ->
@@ -258,6 +327,128 @@ private fun groupEpisodesIntoSeasons(
                 seasonNumber = seasonNo,
                 displayName = seasonNameMap[seasonNo] ?: "Season $seasonNo",
                 episodes = sortedEps
+            )
+        }
+}
+
+/**
+ * Merges AnimeLoadResponse Subbed / Dubbed / None tracks into ONE unified list per season,
+ * deduplicating duplicate episode IDs and attaching per-episode hasSub/hasDub + subData/dubData.
+ */
+private fun mergeAnimeEpisodesIntoSeasons(
+    episodesMap: Map<DubStatus, List<Episode>>,
+    seasonNameMap: Map<Int, String>
+): List<MetaSeasonGroup> {
+    val subList = deduplicateRawEpisodes(episodesMap[DubStatus.Subbed].orEmpty())
+    val dubList = deduplicateRawEpisodes(episodesMap[DubStatus.Dubbed].orEmpty())
+    val noneList = deduplicateRawEpisodes(episodesMap[DubStatus.None].orEmpty())
+
+    if (subList.isEmpty() && dubList.isEmpty() && noneList.isEmpty()) return emptyList()
+
+    // If only DubStatus.None exists, behave like standard episodes (no sub/dub badges)
+    if (subList.isEmpty() && dubList.isEmpty()) {
+        return groupEpisodesIntoSeasons(noneList, seasonNameMap)
+    }
+
+    data class AccEpisode(
+        val seasonNo: Int,
+        val epNum: Int,
+        var title: String,
+        var primaryData: String,
+        var posterUrl: String?,
+        var description: String?,
+        var score: String?,
+        var runTime: Int?,
+        var airDateMs: Long?,
+        var hasSub: Boolean = false,
+        var hasDub: Boolean = false,
+        var subData: String? = null,
+        var dubData: String? = null
+    )
+
+    val mergedByKey = linkedMapOf<Pair<Int, Int>, AccEpisode>()
+
+    fun absorb(list: List<Episode>, isSub: Boolean, isDub: Boolean) {
+        val groupedBySeason = list.groupBy { it.season ?: 1 }
+        groupedBySeason.entries.sortedBy { it.key }.forEach { (seasonNo, rawSeasonEps) ->
+            val sorted = rawSeasonEps.sortedWith(compareBy<Episode> { it.episode ?: Int.MAX_VALUE })
+            sorted.forEachIndexed { idx, ep ->
+                val epNum = ep.episode ?: (idx + 1)
+                val key = seasonNo to epNum
+                val epTitle = ep.name?.trim()?.takeIf { it.isNotBlank() } ?: "Episode $epNum"
+                val epPoster = ep.posterUrl?.takeIf { it.isNotBlank() }
+                val epDesc = ep.description?.trim()?.takeIf { it.isNotBlank() }
+                val epScore = runCatching { ep.score?.toStringNull(0.1, 10, 1) }.getOrNull()
+
+                val existing = mergedByKey[key]
+                if (existing == null) {
+                    mergedByKey[key] = AccEpisode(
+                        seasonNo = seasonNo,
+                        epNum = epNum,
+                        title = epTitle,
+                        primaryData = ep.data,
+                        posterUrl = epPoster,
+                        description = epDesc,
+                        score = epScore,
+                        runTime = ep.runTime,
+                        airDateMs = ep.date,
+                        hasSub = isSub,
+                        hasDub = isDub,
+                        subData = if (isSub) ep.data else null,
+                        dubData = if (isDub) ep.data else null
+                    )
+                } else {
+                    if (isSub) {
+                        existing.hasSub = true
+                        if (existing.subData.isNullOrBlank()) existing.subData = ep.data
+                    }
+                    if (isDub) {
+                        existing.hasDub = true
+                        if (existing.dubData.isNullOrBlank()) existing.dubData = ep.data
+                    }
+                    if (existing.posterUrl.isNullOrBlank() && epPoster != null) existing.posterUrl = epPoster
+                    if (existing.description.isNullOrBlank() && epDesc != null) existing.description = epDesc
+                    if (existing.score.isNullOrBlank() && epScore != null) existing.score = epScore
+                    if ((existing.runTime == null || existing.runTime == 0) && ep.runTime != null) existing.runTime = ep.runTime
+                    if ((existing.airDateMs == null || existing.airDateMs == 0L) && ep.date != null) existing.airDateMs = ep.date
+                    if (existing.title.startsWith("Episode", ignoreCase = true) && !epTitle.startsWith("Episode", ignoreCase = true)) {
+                        existing.title = epTitle
+                    }
+                }
+            }
+        }
+    }
+
+    absorb(subList, isSub = true, isDub = false)
+    absorb(dubList, isSub = false, isDub = true)
+    absorb(noneList, isSub = false, isDub = false)
+
+    return mergedByKey.values
+        .groupBy { it.seasonNo }
+        .entries
+        .sortedBy { it.key }
+        .map { (seasonNo, accList) ->
+            val items = accList.sortedBy { it.epNum }.map { acc ->
+                MetaEpisodeItem(
+                    number = acc.epNum,
+                    season = acc.seasonNo,
+                    title = acc.title,
+                    data = acc.subData ?: acc.dubData ?: acc.primaryData,
+                    posterUrl = acc.posterUrl,
+                    description = acc.description,
+                    score = acc.score,
+                    runTime = acc.runTime,
+                    airDateMs = acc.airDateMs,
+                    hasSub = acc.hasSub,
+                    hasDub = acc.hasDub,
+                    subData = acc.subData,
+                    dubData = acc.dubData
+                )
+            }
+            MetaSeasonGroup(
+                seasonNumber = seasonNo,
+                displayName = seasonNameMap[seasonNo] ?: "Season $seasonNo",
+                episodes = items
             )
         }
 }

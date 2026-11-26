@@ -333,7 +333,7 @@ class SearchViewModel : ViewModel() {
                         singleProviderItems = items,
                         nextPage = 2,
                         hasMoreSingle = respList?.hasNext == true && items.isNotEmpty(),
-                        errorMessage = if (items.isEmpty()) "No matches in ${entry.displayName} for \"$query\"." else null
+                        errorMessage = if (items.isEmpty()) "No matches in ${entry.shortDisplayName} for \"$query\"." else null
                     )
                 }
             } catch (ce: CancellationException) {
@@ -344,7 +344,7 @@ class SearchViewModel : ViewModel() {
                     _uiState.update {
                         it.copy(
                             isSearching = false,
-                            errorMessage = formatFriendlyError(t, entry.displayName)
+                            errorMessage = formatFriendlyError(t, entry.shortDisplayName)
                         )
                     }
                 }
@@ -408,7 +408,7 @@ class SearchViewModel : ViewModel() {
                             _uiState.update { current ->
                                 val updated = (current.globalGroups + ProviderSearchGroup(
                                     providerKey = entry.key,
-                                    displayName = entry.displayName,
+                                    displayName = entry.shortDisplayName,
                                     apiName = entry.api.name,
                                     items = items,
                                     hasMore = respList?.hasNext == true

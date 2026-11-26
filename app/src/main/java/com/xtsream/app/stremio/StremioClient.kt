@@ -2,8 +2,13 @@ package com.xtsream.app.stremio
 
 import android.util.Log
 import com.lagradost.cloudstream3.app
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -253,6 +258,122 @@ object StremioClient {
             return trimmed.substringBefore(':')
         }
         return Regex("\\b(tt\\d{5,})\\b", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.getOrNull(1)
+    }
+
+    /**
+     * Queries all enabled stream-capable Stremio addons in parallel and invokes [onAddonStreams]
+     * in real time as soon as each addon responds.
+     */
+    suspend fun fetchStreamsRealtime(
+        preferredAddon: StremioAddonRecord?,
+        allEnabledAddons: List<StremioAddonRecord>,
+        type: String,
+        videoId: String,
+        onAddonStreams: suspend (StremioAddonRecord, List<StremioStream>) -> Unit
+    ) = withContext(Dispatchers.IO) {
+        val candidates = buildList {
+            if (preferredAddon != null && preferredAddon.manifest.matchesResource("stream", type, videoId)) {
+                add(preferredAddon)
+            }
+            allEnabledAddons.forEach { addon ->
+                if (none { it.manifestUrl == addon.manifestUrl } &&
+                    addon.manifest.matchesResource("stream", type, videoId)
+                ) {
+                    add(addon)
+                }
+            }
+            // Fallback: include any enabled addon with "stream" resource matching type even if idPrefixes omitted
+            allEnabledAddons.forEach { addon ->
+                if (none { it.manifestUrl == addon.manifestUrl } && addon.manifest.hasResource("stream")) {
+                    val mTypes = addon.manifest.types
+                    if (mTypes.isEmpty() || mTypes.any { it.equals(type, ignoreCase = true) }) {
+                        add(addon)
+                    }
+                }
+            }
+        }
+
+        if (candidates.isEmpty()) return@withContext
+
+        val encodedType = encodeSegment(type)
+        val encodedId = encodeSegment(videoId)
+
+        coroutineScope {
+            candidates.map { addon ->
+                async(Dispatchers.IO) {
+                    try {
+                        val url = "${addon.baseUrl}/stream/$encodedType/$encodedId.json${addon.querySuffix}"
+                        val text = withTimeoutOrNull(25_000L) {
+                            app.get(
+                                url = url,
+                                headers = requestHeaders,
+                                cacheTime = 1,
+                                cacheUnit = TimeUnit.MINUTES
+                            ).text.trim()
+                        } ?: return@async
+                        if (!text.startsWith("{")) return@async
+                        val root = runCatching { JSONObject(text) }.getOrNull() ?: return@async
+                        val arr = root.optJSONArray("streams") ?: return@async
+                        val parsed = buildList(arr.length()) {
+                            for (i in 0 until arr.length()) {
+                                val obj = arr.optJSONObject(i) ?: continue
+                                parseStream(obj, addon.manifest.name)?.let { add(it) }
+                            }
+                        }
+                        if (parsed.isNotEmpty()) {
+                            onAddonStreams(addon, parsed)
+                        }
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "Stream fetch failed for ${addon.manifest.name}", t)
+                    }
+                }
+            }.awaitAll()
+        }
+    }
+
+    private fun parseStream(obj: JSONObject, addonName: String): StremioStream? {
+        val url = obj.optCleanString("url")
+        val infoHash = obj.optCleanString("infoHash")
+        val externalUrl = obj.optCleanString("externalUrl")
+        val ytId = obj.optCleanString("ytId")
+        if (url == null && infoHash == null && externalUrl == null && ytId == null) return null
+
+        val name = obj.optCleanString("name")
+        val title = obj.optCleanString("title")
+        val description = obj.optCleanString("description")
+        val fileIdx = if (obj.has("fileIdx") && !obj.isNull("fileIdx")) obj.optInt("fileIdx") else null
+
+        val hints = obj.optJSONObject("behaviorHints")
+        val filename = hints?.optCleanString("filename")
+        val videoSize = hints?.takeIf { it.has("videoSize") && !it.isNull("videoSize") }?.optLong("videoSize")
+
+        val headers = linkedMapOf<String, String>()
+        val proxyHeaders = hints?.optJSONObject("proxyHeaders")?.optJSONObject("request")
+        if (proxyHeaders != null) {
+            val keys = proxyHeaders.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                val v = proxyHeaders.optCleanString(k)
+                if (v != null) headers[k] = v
+            }
+        }
+
+        return StremioStream(
+            addonName = addonName,
+            name = name,
+            title = title,
+            description = description,
+            url = url,
+            infoHash = infoHash,
+            fileIdx = fileIdx,
+            externalUrl = externalUrl,
+            ytId = ytId,
+            headers = headers,
+            filename = filename,
+            videoSize = videoSize
+        )
     }
 
     suspend fun fetchAddonCatalog(

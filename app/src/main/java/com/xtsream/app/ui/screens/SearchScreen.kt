@@ -108,7 +108,7 @@ fun SearchScreen(
 
     val selectedProviderDisplayName = remember(state.selectedProviderKey, loadedProviders) {
         state.selectedProviderKey?.let { key ->
-            loadedProviders.firstOrNull { it.key == key }?.displayName
+            loadedProviders.firstOrNull { it.key == key }?.shortDisplayName
         }
     }
 
@@ -244,7 +244,7 @@ fun SearchScreen(
             }
             items(loadedProviders, key = { it.key }) { entry ->
                 ProviderScopeTab(
-                    label = entry.displayName,
+                    label = entry.shortDisplayName,
                     selected = state.selectedProviderKey == entry.key,
                     onClick = { searchViewModel.selectProviderFilter(entry.key) }
                 )

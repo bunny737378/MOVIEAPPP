@@ -283,7 +283,7 @@ fun HomeScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = activeProvider?.displayName ?: "Select Provider",
+                                text = activeProvider?.shortDisplayName ?: "Select Provider",
                                 color = AppColors.Primary,
                                 fontSize = 19.sp,
                                 fontWeight = FontWeight.Bold,

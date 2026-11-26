@@ -26,8 +26,19 @@ object CommonActivity {
     fun showToast(activity: Activity?, @StringRes message: Int, duration: Int? = null) {
         showToast(activity, activity?.getString(message), duration)
     }
+    private val promoToastKeywords = listOf(
+        "donate", "donation", "patreon", "ko-fi", "buymeacoffee", "buy me a coffee",
+        "join telegram", "join our telegram", "support us on", "sponsor"
+    )
+
+    private fun isPromoToast(message: String): Boolean {
+        val lower = message.lowercase()
+        return promoToastKeywords.any { lower.contains(it) }
+    }
+
     fun showToast(activity: Activity?, message: String?, duration: Int? = null) {
         if (activity == null || message == null) return
+        if (isPromoToast(message)) return
         activity.runOnUiThread { Toast.makeText(activity, message, duration ?: Toast.LENGTH_SHORT).show() }
     }
 }
